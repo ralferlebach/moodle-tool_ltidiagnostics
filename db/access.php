@@ -15,25 +15,74 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Capability definitions for {{COMPONENT}}.
+ * Capability definitions for tool_ltidiagnostics.
  *
- * @package    {{COMPONENT}}
- * @copyright  {{YEAR}} {{AUTHOR}}
+ * Default roles are recommendations only: apart from the course level aggregate view for
+ * teachers, every capability is granted to nobody but the site administrators by default.
+ *
+ * @package    tool_ltidiagnostics
+ * @copyright  2026 Ralf Erlebach
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 defined('MOODLE_INTERNAL') || die();
 
-// Grant capabilities to archetypes deliberately and check them in the context the action belongs
-// to. A course-level decision asked in the system context silently ignores role switching,
-// because Moodle suspends the administrator bypass only for the context being switched.
 $capabilities = [
-    '{{PLUGINTYPE}}/{{PLUGINNAME}}:view' => [
+    // Technical diagnosis of all connections (administrators).
+    'tool/ltidiagnostics:view' => [
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_PERSONAL | RISK_CONFIG,
+        'archetypes' => [],
+    ],
+    // Aggregate, anonymous diagnosis of the LTI activities of one course (teachers).
+    'tool/ltidiagnostics:viewcourse' => [
         'captype' => 'read',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes' => [
             'editingteacher' => CAP_ALLOW,
             'manager' => CAP_ALLOW,
         ],
+    ],
+    // Pseudonymised diagnostic id and error summary (support staff).
+    'tool/ltidiagnostics:viewsupport' => [
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes' => [],
+    ],
+    // Audit log, data flow and retention views (privacy officers).
+    'tool/ltidiagnostics:viewprivacy' => [
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_PERSONAL,
+        'archetypes' => [],
+    ],
+    // Desired-state profiles and the diagnostic mode.
+    'tool/ltidiagnostics:configure' => [
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_CONFIG,
+        'archetypes' => [],
+    ],
+    // Safe active checks: outgoing GET requests to endpoints of the other side.
+    'tool/ltidiagnostics:runchecks' => [
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_CONFIG,
+        'archetypes' => [],
+    ],
+    // Import of web server logs.
+    'tool/ltidiagnostics:importlogs' => [
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_PERSONAL | RISK_CONFIG,
+        'archetypes' => [],
+    ],
+    // Export of diagnostic reports.
+    'tool/ltidiagnostics:export' => [
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_PERSONAL,
+        'archetypes' => [],
     ],
 ];

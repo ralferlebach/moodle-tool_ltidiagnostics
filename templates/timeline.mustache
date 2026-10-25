@@ -1,0 +1,64 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template tool_ltidiagnostics/timeline
+
+    Timeline of one connection. An arrow to a later stage is shown only when correlation is direct or strong.
+
+    Example context (json):
+    {
+        "caption": "Timeline",
+        "headers": {"time": "Time (UTC)", "stage": "Stage", "source": "Source", "event": "Event", "link": "Correlated with"},
+        "empty": "",
+        "rows": [
+            {"time": "2026-10-24 10:00:00", "stage": "Launch", "source": "Observer", "event": "\\core\\event\\user_loggedin", "links": [
+                {"text": "Follow-up (direct)"}]}
+        ],
+        "sources": [{"label": "Logstore", "available": true, "statelabel": "available"}]
+    }
+}}
+<ul class="list-inline">
+    {{#sources}}<li class="list-inline-item"><span class="badge {{#available}}bg-success{{/available}}{{^available}}bg-secondary{{/available}}">{{statelabel}}</span> {{label}}</li>{{/sources}}
+</ul>
+{{#empty}}<p class="alert alert-info">{{empty}}</p>{{/empty}}
+{{^empty}}
+<div class="table-responsive">
+<table class="table table-sm generaltable" id="tool_ltidiagnostics_timeline">
+    <caption>{{caption}}</caption>
+    <thead>
+        <tr>
+            <th scope="col">{{headers.time}}</th>
+            <th scope="col">{{headers.stage}}</th>
+            <th scope="col">{{headers.source}}</th>
+            <th scope="col">{{headers.event}}</th>
+            <th scope="col">{{headers.link}}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{#rows}}
+        <tr data-stage="{{stagecode}}" data-source="{{sourcecode}}">
+            <td>{{time}}</td>
+            <td>{{stage}}</td>
+            <td>{{source}}</td>
+            <td>{{event}}</td>
+            <td>{{#links}}<div>&rarr; {{text}}</div>{{/links}}</td>
+        </tr>
+        {{/rows}}
+    </tbody>
+</table>
+</div>
+{{/empty}}

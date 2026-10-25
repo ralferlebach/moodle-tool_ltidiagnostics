@@ -1,5 +1,5 @@
 ##############################################################################
-# Moodle Plugin CI - main (release) pipeline - {{COMPONENT}}
+# Moodle Plugin CI - main (release) pipeline - tool_ltidiagnostics
 #
 # Runs ONLY on push / PR to main; provides the "CI complete" status check for
 # branch protection. Full SEQUENTIAL pipeline per matrix cell across the
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-22.04
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ matrix.pg }}
         env:
           POSTGRES_USER: 'postgres'
           POSTGRES_HOST_AUTH_METHOD: 'trust'
@@ -35,7 +35,7 @@ jobs:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
       mariadb:
-        image: mariadb:10.11
+        image: mariadb:${{ matrix.maria }}
         env:
           MYSQL_USER: 'root'
           MYSQL_ALLOW_EMPTY_PASSWORD: "true"
@@ -46,14 +46,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql }
-          - { moodle: MOODLE_405_STABLE, php: '8.1', database: mariadb }
-          - { moodle: MOODLE_405_STABLE, php: '8.2', database: pgsql }
-          - { moodle: MOODLE_405_STABLE, php: '8.3', database: mariadb }
-          - { moodle: MOODLE_500_STABLE, php: '8.2', database: pgsql }
-          - { moodle: MOODLE_500_STABLE, php: '8.3', database: mariadb }
-          - { moodle: MOODLE_502_STABLE, php: '8.3', database: pgsql }
-          - { moodle: MOODLE_502_STABLE, php: '8.3', database: mariadb }
+          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_405_STABLE, php: '8.3', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_500_STABLE, php: '8.2', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_500_STABLE, php: '8.3', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_501_STABLE, php: '8.3', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_501_STABLE, php: '8.4', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_502_STABLE, php: '8.3', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_502_STABLE, php: '8.4', database: mariadb, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_503_STABLE, php: '8.3', database: pgsql, pg: '17', maria: '11.4' }
+          - { moodle: MOODLE_503_STABLE, php: '8.4', database: mariadb, pg: '17', maria: '11.4' }
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -81,9 +83,6 @@ jobs:
           sudo locale-gen en_AU.UTF-8
       - name: Install Moodle, dependencies and plugin
         run: |
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
           moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
         env:
           DB: ${{ matrix.database }}
@@ -117,7 +116,7 @@ jobs:
       - name: Behat features
         id: behat
         if: ${{ always() }}
-        run: set -o pipefail; moodle-plugin-ci behat --profile chrome --tags "@{{COMPONENT}}&&~@broken" --dump 2>&1 | tee ci-logs/behat.log
+        run: set -o pipefail; moodle-plugin-ci behat --profile chrome --tags "@tool_ltidiagnostics&&~@broken" --dump 2>&1 | tee ci-logs/behat.log
       - name: Collect error summary
         if: ${{ always() }}
         run: |
@@ -159,7 +158,7 @@ jobs:
         with:
           path: plugin
 
-      - name: All four {{PLUGINTITLE}} plugins must ship the same version
+      - name: All four LTI Diagnostics plugins must ship the same version
         run: |
           get_version() {
             grep -oE '\$plugin->version[[:space:]]*=[[:space:]]*[0-9]+' "$1"               | grep -oE '[0-9]+$'
@@ -168,9 +167,9 @@ jobs:
           echo "This plugin: $own"
           rc=0
           for sib in auth enrol mod tool; do
-            git clone --depth 1 --branch main               "https://github.com/{{GITHUBUSER}}/moodle-${sib}_{{PLUGINNAME}}.git" "/tmp/$sib" >/dev/null 2>&1
+            git clone --depth 1 --branch main               "https://github.com/ralferlebach/moodle-${sib}_ltidiagnostics.git" "/tmp/$sib" >/dev/null 2>&1
             sibver=$(get_version "/tmp/$sib/version.php")
-            echo "  ${sib}_{{PLUGINNAME}}: $sibver"
+            echo "  ${sib}_ltidiagnostics: $sibver"
             if [[ "$sibver" != "$own" ]]; then
               echo "  MISMATCH: expected $own"
               rc=1
@@ -202,7 +201,7 @@ jobs:
         run: |
           # git archive is what honours .gitattributes export-ignore. Building the artefact here
           # means the gate tests the file set that is actually shipped, not the working tree.
-          git archive --format=tar --prefix={{PLUGINNAME}}/ HEAD > /tmp/release.tar
+          git archive --format=tar --prefix=ltidiagnostics/ HEAD > /tmp/release.tar
           tar -tf /tmp/release.tar > /tmp/release.list
           echo "Artefakt enthält $(wc -l < /tmp/release.list) Einträge."
 
@@ -210,9 +209,9 @@ jobs:
         run: |
           rc=0
           while read -r forbidden; do
-            if grep -qE "^{{PLUGINNAME}}/${forbidden}" /tmp/release.list; then
+            if grep -qE "^ltidiagnostics/${forbidden}" /tmp/release.list; then
               echo "VERBOTEN im Release-Artefakt: $forbidden"
-              grep -E "^{{PLUGINNAME}}/${forbidden}" /tmp/release.list | head -5
+              grep -E "^ltidiagnostics/${forbidden}" /tmp/release.list | head -5
               rc=1
             fi
           done <<'PATTERNS'
@@ -234,7 +233,7 @@ jobs:
 
       - name: The artefact must still contain what Moodle runs
         run: |
-          for required in {{PLUGINNAME}}/version.php {{PLUGINNAME}}/lang {{PLUGINNAME}}/db; do
+          for required in ltidiagnostics/version.php ltidiagnostics/lang ltidiagnostics/db; do
             if ! grep -q "^${required}" /tmp/release.list; then
               echo "FEHLT im Release-Artefakt: $required"
               exit 1
@@ -279,9 +278,6 @@ jobs:
 
       - name: Install Moodle and the plugin ecosystem
         run: |
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
-          moodle-plugin-ci add-plugin {{GITHUBUSER}}/moodle-{{COMPONENT}}
           moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
         env:
           DB: pgsql
@@ -305,7 +301,7 @@ jobs:
             exit 1
           fi
           echo "Report: $report"
-          # The gate measures THIS plugin only. Counting every path containing '{{PLUGINNAME}}' would
+          # The gate measures THIS plugin only. Counting every path containing 'ltidiagnostics' would
           # also include the three sibling plugins that are installed alongside but whose tests do
           # not run here - that produced a meaningless 0.5% and made the gate useless.
           php plugin/tools/coverage_gate.php "$report" "$COVERAGE_FLOOR"

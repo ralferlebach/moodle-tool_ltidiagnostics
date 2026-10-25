@@ -1,0 +1,68 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template tool_ltidiagnostics/connection_list
+
+    List of selectable LTI connections.
+
+    Example context (json):
+    {
+        "caption": "Connections",
+        "empty": "",
+        "headers": {"name": "Name", "role": "Role", "issuer": "Issuer", "client": "Client ID", "deployment": "Deployment ID",
+            "state": "State", "services": "Services", "action": "Action"},
+        "rows": [
+            {"name": "Example tool", "role": "Platform", "issuer": "https://platform.example", "clientid": "abc***yz",
+             "deploymentid": "7", "state": "active", "services": "AGS, NRPS", "url": "https://moodle.example/admin/tool/ltidiagnostics/connection.php?key=platform:7",
+             "actionlabel": "Open"}
+        ]
+    }
+}}
+{{#empty}}<p class="alert alert-info">{{empty}}</p>{{/empty}}
+{{^empty}}
+<div class="table-responsive">
+<table class="table table-striped generaltable" id="tool_ltidiagnostics_connections">
+    <caption>{{caption}}</caption>
+    <thead>
+        <tr>
+            <th scope="col">{{headers.name}}</th>
+            <th scope="col">{{headers.role}}</th>
+            <th scope="col">{{headers.issuer}}</th>
+            <th scope="col">{{headers.client}}</th>
+            <th scope="col">{{headers.deployment}}</th>
+            <th scope="col">{{headers.state}}</th>
+            <th scope="col">{{headers.services}}</th>
+            <th scope="col">{{headers.action}}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{#rows}}
+        <tr>
+            <th scope="row">{{name}}</th>
+            <td>{{role}}</td>
+            <td>{{issuer}}</td>
+            <td>{{clientid}}</td>
+            <td>{{deploymentid}}</td>
+            <td>{{state}}</td>
+            <td>{{services}}</td>
+            <td><a href="{{url}}">{{actionlabel}}</a></td>
+        </tr>
+        {{/rows}}
+    </tbody>
+</table>
+</div>
+{{/empty}}

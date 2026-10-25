@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="admin/tool/ltidiagnostics/db" VERSION="20261024" COMMENT="XMLDB file for Moodle admin/tool/ltidiagnostics"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../../lib/xmldb/xmldb.xsd"
+>
+  <TABLES>
+    <TABLE NAME="tool_ltidiagnostics_obs" COMMENT="Minimal observations of LTI related events (no payloads, no tokens, no names)">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="traceid" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Per-request trace id (or a sanitised X-Request-ID)"/>
+        <FIELD NAME="eventtype" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false" COMMENT="launch, enrolment, group, grade, service_unknown, view"/>
+        <FIELD NAME="direction" TYPE="char" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="in, out or local"/>
+        <FIELD NAME="eventname" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="component" TYPE="char" LENGTH="100" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="connkey" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Connection key when it could be resolved unambiguously, else empty"/>
+        <FIELD NAME="issuerhash" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="SHA-256 of the issuer when known, else empty"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="cmid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="contextid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Affected user id (reference only, no profile data is copied)"/>
+        <FIELD NAME="objectid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="entrypoint" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false" COMMENT="web, lti_services, cli, ws or other"/>
+        <FIELD NAME="fieldnames" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Names (never values) of the event other-data keys"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="UTC unix time"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="connkey_time" UNIQUE="false" FIELDS="connkey, timecreated"/>
+        <INDEX NAME="traceid" UNIQUE="false" FIELDS="traceid"/>
+        <INDEX NAME="course_time" UNIQUE="false" FIELDS="courseid, timecreated"/>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="tool_ltidiagnostics_audit" COMMENT="Audit of views and exports of diagnostic data">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="action" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="connkey" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="detail" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Short machine readable detail, never a secret"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="tool_ltidiagnostics_profile" COMMENT="Desired-state profiles (non-binding)">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="connkey" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="profilejson" TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="connkey" UNIQUE="false" FIELDS="connkey"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="tool_ltidiagnostics_snap" COMMENT="Historised snapshots of the capability inventory and of reports">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="connkey" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="kind" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="contenthash" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="snapjson" TYPE="text" NOTNULL="true" SEQUENCE="false" COMMENT="Redacted JSON, never contains secrets"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="connkey_kind_time" UNIQUE="false" FIELDS="connkey, kind, timecreated"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="tool_ltidiagnostics_imp" COMMENT="Web server log import jobs (provenance of imported lines)">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="kind" TYPE="char" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="access or error"/>
+        <FIELD NAME="format" TYPE="char" LENGTH="30" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="sourcetype" TYPE="char" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="path or upload"/>
+        <FIELD NAME="sourcename" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Base name only"/>
+        <FIELD NAME="fingerprint" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="SHA-256 of the file content"/>
+        <FIELD NAME="timezone" TYPE="char" LENGTH="100" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="skew" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Configured clock skew in seconds that was added to the source times"/>
+        <FIELD NAME="rangefrom" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="rangeto" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="linesread" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="linesstored" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="linesskipped" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="linesinvalid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="errormessage" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="fingerprint" UNIQUE="false" FIELDS="fingerprint"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="tool_ltidiagnostics_acc" COMMENT="Redacted, LTI related web server log lines">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="importid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="linehash" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false" COMMENT="Idempotency key"/>
+        <FIELD NAME="kind" TYPE="char" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="logtime" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="UTC unix time after timezone and skew normalisation"/>
+        <FIELD NAME="method" TYPE="char" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="path" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Path with query values redacted"/>
+        <FIELD NAME="httpstatus" TYPE="int" LENGTH="5" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="bytes" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="ipmask" TYPE="char" LENGTH="45" NOTNULL="true" SEQUENCE="false" COMMENT="Truncated client address, never used alone for correlation"/>
+        <FIELD NAME="viaproxy" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="requestid" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="category" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="message" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Redacted error log message"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="linehash" UNIQUE="true" FIELDS="linehash"/>
+        <INDEX NAME="logtime" UNIQUE="false" FIELDS="logtime"/>
+        <INDEX NAME="requestid" UNIQUE="false" FIELDS="requestid"/>
+        <INDEX NAME="importid" UNIQUE="false" FIELDS="importid"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
