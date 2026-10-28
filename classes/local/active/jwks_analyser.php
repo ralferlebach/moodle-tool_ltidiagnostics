@@ -62,6 +62,7 @@ class jwks_analyser {
                 'kty' => isset($key['kty']) ? (string) $key['kty'] : '',
                 'alg' => isset($key['alg']) ? (string) $key['alg'] : '',
                 'use' => isset($key['use']) ? (string) $key['use'] : '',
+                'thumbprint' => self::thumbprint($key),
             ];
         }
         $out['valid'] = (bool) $out['keys'];
@@ -70,5 +71,54 @@ class jwks_analyser {
             $out['haskid'] = in_array($expectedkid, array_column($out['keys'], 'kid'), true);
         }
         return $out;
+    }
+
+    /**
+     * RFC 7638 thumbprint of a public JWK (RSA or EC). Only the public members are used.
+     *
+     * @param array $jwk Key.
+     * @return string Base64url SHA-256, empty for an unsupported key.
+     */
+    public static function thumbprint(array $jwk): string {
+        $kty = (string) ($jwk['kty'] ?? '');
+        if ($kty === 'RSA' && isset($jwk['e'], $jwk['n'])) {
+            $members = ['e' => (string) $jwk['e'], 'kty' => 'RSA', 'n' => (string) $jwk['n']];
+        } else if ($kty === 'EC' && isset($jwk['crv'], $jwk['x'], $jwk['y'])) {
+            $members = ['crv' => (string) $jwk['crv'], 'kty' => 'EC', 'x' => (string) $jwk['x'], 'y' => (string) $jwk['y']];
+        } else {
+            return '';
+        }
+        $json = json_encode($members, JSON_UNESCAPED_SLASHES);
+        return rtrim(strtr(base64_encode(hash('sha256', (string) $json, true)), '+/', '-_'), '=');
+    }
+
+    /**
+     * RFC 7638 thumbprint of an RSA public key given as PEM (a static key configured instead of a key set URL), or of
+     * the public half of a private key. The key material itself is never returned.
+     *
+     * @param string $pem PEM text.
+     * @return string Thumbprint or empty when the text is no RSA key.
+     */
+    public static function thumbprint_from_pem(string $pem): string {
+        if (trim($pem) === '') {
+            return '';
+        }
+        $key = @openssl_pkey_get_public($pem);
+        if ($key === false) {
+            $private = @openssl_pkey_get_private($pem);
+            if ($private === false) {
+                return '';
+            }
+            $details = openssl_pkey_get_details($private);
+        } else {
+            $details = openssl_pkey_get_details($key);
+        }
+        if (!is_array($details) || empty($details['rsa']['n']) || empty($details['rsa']['e'])) {
+            return '';
+        }
+        $b64 = function (string $bin): string {
+            return rtrim(strtr(base64_encode($bin), '+/', '-_'), '=');
+        };
+        return self::thumbprint(['kty' => 'RSA', 'n' => $b64($details['rsa']['n']), 'e' => $b64($details['rsa']['e'])]);
     }
 }

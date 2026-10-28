@@ -26,6 +26,8 @@ namespace tool_ltidiagnostics\local;
  * @covers     \tool_ltidiagnostics\local\redactor
  */
 final class redactor_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /**
      * Free text redaction.
      *

@@ -42,14 +42,27 @@ class cleanup_task extends \core\task\scheduled_task {
      */
     public function execute() {
         global $DB;
-        $days = max(1, (int) config::get('retentiondays'));
-        $before = time() - $days * DAYSECS;
-        $deleted = observation_store::purge_older_than($before);
-        $DB->delete_records_select('tool_ltidiagnostics_acc', 'logtime < ?', [$before]);
-        $DB->delete_records_select('tool_ltidiagnostics_imp', 'timecreated < ?', [$before]);
-        $DB->delete_records_select('tool_ltidiagnostics_snap', 'timecreated < ?', [time() - 365 * DAYSECS]);
-        $DB->delete_records_select('tool_ltidiagnostics_audit', 'timecreated < ?', [time() - 365 * DAYSECS]);
+        $now = time();
+        $days = function (string $setting): int {
+            return max(1, (int) config::get($setting));
+        };
+        // Retention per data class (DIA-04). Observations follow "retentiondays"; imported web server lines and their
+        // jobs "retentionaccdays"; audit rows, snapshots and imported partner data their own settings.
+        $deleted = observation_store::purge_older_than($now - $days('retentiondays') * DAYSECS);
+        $acc = $now - $days('retentionaccdays') * DAYSECS;
+        $lines = $DB->count_records_select('tool_ltidiagnostics_acc', 'logtime < ?', [$acc]);
+        $DB->delete_records_select('tool_ltidiagnostics_acc', 'logtime < ?', [$acc]);
+        $DB->delete_records_select('tool_ltidiagnostics_imp', 'timecreated < ?', [$acc]);
+        $partnerkinds = [\tool_ltidiagnostics\local\partner_package::KIND, \tool_ltidiagnostics\local\transfer_report::KIND];
+        [$insql, $params] = $DB->get_in_or_equal($partnerkinds);
+        $DB->delete_records_select(
+            'tool_ltidiagnostics_snap',
+            "kind $insql AND timecreated < ?",
+            array_merge($params, [$now - $days('retentionpartnerdays') * DAYSECS])
+        );
+        $DB->delete_records_select('tool_ltidiagnostics_snap', 'timecreated < ?', [$now - $days('retentionsnapdays') * DAYSECS]);
+        $DB->delete_records_select('tool_ltidiagnostics_audit', 'timecreated < ?', [$now - $days('retentionauditdays') * DAYSECS]);
         diagnostic_mode::expire();
-        mtrace("tool_ltidiagnostics: removed $deleted observations older than $days days.");
+        mtrace("tool_ltidiagnostics: removed $deleted observations and $lines imported log lines past their retention.");
     }
 }

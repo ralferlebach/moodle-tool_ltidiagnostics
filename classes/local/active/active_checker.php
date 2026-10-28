@@ -41,6 +41,8 @@ class active_checker {
     private $dns;
     /** @var bool */
     private $allowprivate;
+    /** @var string[] Exact allow-list of private targets. */
+    private $exact;
 
     /**
      * Constructor.
@@ -48,10 +50,17 @@ class active_checker {
      * @param http_fetcher|null $fetcher HTTP component (default: Moodle curl).
      * @param dns_resolver|null $dns DNS component (default: system resolver).
      * @param bool|null $allowprivate Whether private targets are allowed (default: plugin setting).
+     * @param string[]|null $exact Exact allow-list of private targets (default: plugin setting).
      */
-    public function __construct(?http_fetcher $fetcher = null, ?dns_resolver $dns = null, ?bool $allowprivate = null) {
-        $this->fetcher = $fetcher ?? new curl_fetcher();
+    public function __construct(
+        ?http_fetcher $fetcher = null,
+        ?dns_resolver $dns = null,
+        ?bool $allowprivate = null,
+        ?array $exact = null
+    ) {
         $this->dns = $dns ?? new system_dns_resolver();
+        $this->exact = $exact ?? url_guard::exact_list();
+        $this->fetcher = $fetcher ?? new curl_fetcher($this->dns, $this->exact);
         $this->allowprivate = $allowprivate ?? (bool) \tool_ltidiagnostics\local\config::get('allowprivatetargets');
     }
 
@@ -63,14 +72,15 @@ class active_checker {
      * @param int $now Local time (injectable for tests).
      * @param string $expectedkid Optional kid to look for in a JWKS.
      * @return array url, purpose, code (classifier code), dns (null|array), httpstatus, certexpiry, skew, framing, jwks,
-     *         redirects (count), checkedat
+     *         redirects (count), viaproxy, pinned, blockreason, checkedat
      */
     public function check(string $url, string $purpose, int $now, string $expectedkid = ''): array {
         $out = [
             'url' => $url, 'purpose' => $purpose, 'code' => '', 'dns' => null, 'httpstatus' => 0, 'certexpiry' => null,
             'skew' => null, 'framing' => null, 'jwks' => null, 'redirects' => 0, 'checkedat' => $now,
+            'viaproxy' => false, 'pinned' => false, 'pinmode' => '', 'blockreason' => '',
         ];
-        $reason = url_guard::check($url, $this->allowprivate);
+        $reason = url_guard::check($url, $this->allowprivate, $this->exact);
         if ($reason !== url_guard::OK) {
             $out['code'] = 'blocked_by_policy';
             $out['blockreason'] = $reason;
@@ -83,7 +93,7 @@ class active_checker {
             $out['code'] = 'dns_failure';
             return $out;
         }
-        if (!$this->allowprivate) {
+        if (!$this->allowprivate && !url_guard::exact_allowed($url, $this->exact)) {
             foreach ($addresses as $address) {
                 if (url_guard::is_internal_address($address)) {
                     $out['code'] = 'blocked_by_policy';
@@ -94,6 +104,10 @@ class active_checker {
         }
         $result = $this->fetcher->get($url, $this->allowprivate);
         $out['code'] = error_classifier::classify($result);
+        $out['blockreason'] = $result->blocked;
+        $out['viaproxy'] = !empty($result->info['viaproxy']);
+        $out['pinned'] = !empty($result->info['pinned']);
+        $out['pinmode'] = (string) ($result->info['pinmode'] ?? '');
         $out['httpstatus'] = $result->httpstatus;
         $out['redirects'] = count($result->redirects);
         if (!empty($result->info['certinfo'])) {

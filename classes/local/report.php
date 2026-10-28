@@ -81,16 +81,50 @@ class report {
                 'detail' => redactor::text($str['detail']),
                 'fix' => redactor::text($str['fix']),
                 'verify' => $str['verify'],
+                'where' => $str['where'],
+                'uncertain' => $str['uncertain'],
+                'alternative' => redactor::text($str['alt']),
+                'consequence' => $f->consequence,
                 'evidencekind' => $f->evidencekind,
                 'evidence' => redactor::text($f->evidence),
                 'confidence' => $f->confidence,
                 'checkedat' => $f->checkedat ? gmdate('c', $f->checkedat) : '',
+                'system' => $f->system,
+                'certainty' => $f->certainty,
+                'check' => redactor::text($f->diagnosis()['check']),
             ];
         }
+        $messages = [];
+        foreach ($result['messages'] ?? [] as $m) {
+            $messages[] = [
+                'id' => $m['id'],
+                'label' => get_string('msg_' . $m['id'], 'tool_ltidiagnostics'),
+                'group' => $m['group'],
+                'direction' => $m['direction'],
+                'configured' => $m['configured'],
+                'observed' => $m['observed'],
+                'seen' => $m['seen'] ? gmdate('c', $m['seen']) : '',
+                'verified' => (bool) $m['verified'],
+                'booked' => $m['booked'],
+                'state' => $m['state'],
+                'transportonly' => (bool) $m['transportonly'],
+                'failures' => (int) $m['failures'],
+                'paged' => (int) $m['paged'],
+                'missingscopes' => $m['missingscopes'],
+                'limit' => $m['limit'],
+            ];
+        }
+        $chains = [];
+        foreach ($result['chains'] ?? [] as $ch) {
+            $chains[] = ['id' => $ch['id'], 'verdict' => $ch['verdict'], 'weakest' => $ch['weakest'], 'reason' => $ch['reason'],
+                'legs' => $ch['legs']];
+        }
+        $fields = array_values($result['fields'] ?? []);
         $layers = [];
         foreach ($result['layers'] as $layer => $info) {
             $layers[$layer] = $info['light'];
         }
+        $observability = self::observability_rows($result['observability'] ?? []);
         $timeline = null;
         if (!empty($options['timeline'])) {
             $timeline = [
@@ -129,7 +163,13 @@ class report {
             'layers' => $layers,
             'summary' => $result['summary'],
             'matrix' => $matrix,
+            'rootcause' => !empty($result['rootcause']) ? $result['rootcause']->testid : '',
             'findings' => $findings,
+            'observability' => $observability,
+            'messages' => $messages,
+            'chains' => $chains,
+            'fields' => $fields,
+            'partner' => $result['partner'] ?? null,
             'delta' => $result['delta'],
             'timeline' => $timeline,
             'sources' => $options['sources'] ?? [],
@@ -137,7 +177,41 @@ class report {
                 get_string('limit_logsnothttp', 'tool_ltidiagnostics'),
                 get_string('limit_scopesnotsuccess', 'tool_ltidiagnostics'),
                 get_string('limit_absencenotevidence', 'tool_ltidiagnostics'),
-                get_string('limit_remoteinvisible', 'tool_ltidiagnostics')],
+                get_string('limit_remoteinvisible', 'tool_ltidiagnostics'),
+                get_string('limit_nopayloads', 'tool_ltidiagnostics')],
         ];
+    }
+
+    /**
+     * Observability table in a form that is identical for the screen, JSON, Markdown and CSV.
+     *
+     * Times are UTC ISO 8601; "seen" is empty when no matching evidence exists in the evaluated window. The level is a
+     * capability of the instrumentation, only a seen time makes it an observation.
+     *
+     * @param array $rows Result of observability::build().
+     * @return array[]
+     */
+    public static function observability_rows(array $rows): array {
+        $out = [];
+        foreach ($rows as $id => $row) {
+            $parts = [];
+            foreach (['request', 'response'] as $part) {
+                $cell = $row[$part];
+                $parts[$part] = [
+                    'level' => $cell['level'],
+                    'potential' => $cell['potential'],
+                    'seen' => $cell['seen'] ? gmdate('c', $cell['seen']) : '',
+                    'basis' => $cell['basis'],
+                    'needs' => $cell['needs'],
+                ];
+            }
+            $out[] = [
+                'transaction' => $id,
+                'label' => get_string('obs_tx_' . $id, 'tool_ltidiagnostics'),
+                'direction' => $row['direction'],
+                'capable' => $row['capable'],
+            ] + $parts;
+        }
+        return $out;
     }
 }

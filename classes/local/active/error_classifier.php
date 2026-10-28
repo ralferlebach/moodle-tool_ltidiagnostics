@@ -41,7 +41,7 @@ class error_classifier {
         if ($r->blocked !== '') {
             return 'blocked_by_policy';
         }
-        if ($r->httpstatus === 407 || stripos($r->error, 'CONNECT') !== false && strpos($r->error, '407') !== false) {
+        if ($r->httpstatus === 407 || self::is_proxy_407_message($r->error)) {
             return 'proxy_407';
         }
         switch ($r->errno) {
@@ -54,12 +54,16 @@ class error_classifier {
             case 7:
                 return 'connection_refused';
             case 28:
+                // No TCP connection within the connect timeout although the name was resolved (or pinned: then curl
+                // reports a lookup time of about zero, but says that it failed to connect): packets are dropped.
                 $connect = (float) ($r->info['connect_time'] ?? 0);
-                return $connect <= 0.0 && (float) ($r->info['namelookup_time'] ?? 0) > 0.0 ? 'firewall_drop_suspected' : 'timeout';
+                $resolved = (float) ($r->info['namelookup_time'] ?? 0) > 0.0
+                    || stripos($r->error, 'Failed to connect') !== false || stripos($r->error, 'Connection timed out') !== false;
+                return $connect <= 0.0 && $resolved ? 'firewall_drop_suspected' : 'timeout';
             case 51:
             case 60:
             case 83:
-                return self::certificate((int) ($r->info['ssl_verify_result'] ?? 0), $r->errno);
+                return self::certificate((int) ($r->info['ssl_verify_result'] ?? 0), $r->errno, $r->error);
             case 35:
             case 53:
             case 54:
@@ -98,13 +102,35 @@ class error_classifier {
     }
 
     /**
+     * Whether a curl error message reports a 407 answer of a proxy to CONNECT.
+     *
+     * Only curl's own wordings count: "CONNECT tunnel failed, response 407" (curl 7.71+) and "Received HTTP code 407 from
+     * proxy after CONNECT" (older). A loose "contains CONNECT and 407" test matched a plain connect timeout to a port such
+     * as 45407 ("Failed to connect to host port 45407 after 2001 ms"), which turned a dropped connection into proxy_407.
+     *
+     * @param string $error curl error message.
+     * @return bool
+     */
+    public static function is_proxy_407_message(string $error): bool {
+        $pattern = '/CONNECT tunnel failed, response 407\b|Received HTTP code 407 from proxy after CONNECT/i';
+        return (bool) preg_match($pattern, $error);
+    }
+
+    /**
      * Map the OpenSSL verification result to a certificate code.
+     *
+     * Since curl 7.62 a host name mismatch is reported as error 60 (no longer 51), and the verification result is not
+     * the OpenSSL code 62 (curl compares the names itself and reports 0 or 1); the message names the subject name.
      *
      * @param int $verify X509 verify result (curl ssl_verify_result).
      * @param int $errno curl error number.
+     * @param string $error curl error text.
      * @return string
      */
-    public static function certificate(int $verify, int $errno = 60): string {
+    public static function certificate(int $verify, int $errno = 60, string $error = ''): string {
+        if (preg_match('/subject name|host ?name|does not match target/i', $error)) {
+            return 'cert_hostname';
+        }
         switch ($verify) {
             case 10:
                 return 'cert_expired';

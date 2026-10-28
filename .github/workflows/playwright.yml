@@ -17,9 +17,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: node --check
+      - name: node --check (every spec, helper and config; list in package.json "check")
         working-directory: tests/playwright
-        run: |
-          node --check lib.js
-          node --check ltidiagnostics.spec.js
-          node --check playwright.config.js
+        run: npm run check

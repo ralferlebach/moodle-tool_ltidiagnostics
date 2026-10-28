@@ -19,7 +19,8 @@ namespace tool_ltidiagnostics\local;
 /**
  * Cross-source correlation with explicit confidence classes.
  *
- * direct: the same trace id. strong: at least two stable shared references and the same time window.
+ * direct: the same trace id, or the same correlation id of an LTI family transfer (other['correlationid'], identical on
+ * both sites). strong: at least two stable shared references and the same time window.
  * tentative: only the time window. unmatched: nothing links them. A client IP address is never a
  * reference; it is not even part of the compared data.
  *
@@ -43,8 +44,8 @@ class correlation {
     /**
      * Classify the relation of two normalised items.
      *
-     * An item is an array with: time (int), traceid (string, may be empty), refs (array of stable references such as
-     * issuerhash, courseid, cmid, userid, objectid, taskid, eventid).
+     * An item is an array with: time (int), traceid (string, may be empty), correlationid (string, optional), refs
+     * (array of stable references such as issuerhash, courseid, cmid, userid, objectid, taskid, eventid).
      *
      * @param array $a First item.
      * @param array $b Second item.
@@ -56,6 +57,9 @@ class correlation {
         $ta = (string) ($a['traceid'] ?? '');
         $tb = (string) ($b['traceid'] ?? '');
         if ($ta !== '' && $ta === $tb) {
+            return self::DIRECT;
+        }
+        if (self::same_correlation($a, $b)) {
             return self::DIRECT;
         }
         $near = abs(((int) $a['time']) - ((int) $b['time'] + $skew)) <= $window;
@@ -72,6 +76,19 @@ class correlation {
             }
         }
         return $shared >= 2 ? self::STRONG : self::TENTATIVE;
+    }
+
+    /**
+     * Whether two items carry the same, non-empty correlation id of a family transfer. Time does not matter: the id is
+     * unique per transfer version, and the two sites may log hours apart (retries).
+     *
+     * @param array $a First item.
+     * @param array $b Second item.
+     * @return bool
+     */
+    public static function same_correlation(array $a, array $b): bool {
+        $ca = (string) ($a['correlationid'] ?? '');
+        return $ca !== '' && $ca === (string) ($b['correlationid'] ?? '');
     }
 
     /**

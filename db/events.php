@@ -34,6 +34,13 @@ $events = [
     '\core\event\user_graded',
     '\mod_lti\event\course_module_viewed',
     '\mod_lti\event\unknown_service_api_called',
+    // Transfer events of the optional plugin local_lticompletionsync: one observer on their common base class covers all
+    // of them. Without that plugin the class does not exist and the observer is never called. Other family events are
+    // read from the log stores by component prefix (classes/local/logstore_source.php).
+    '\local_lticompletionsync\event\sync_event',
+    // Group assignment outcomes of the optional plugin tool_ltigroupautoenrol (from 1.2.1, GA-03). Inert without it.
+    '\tool_ltigroupautoenrol\event\group_assignment_completed',
+    '\tool_ltigroupautoenrol\event\group_assignment_failed',
 ];
 
 $observers = [];

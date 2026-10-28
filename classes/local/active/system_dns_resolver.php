@@ -35,17 +35,25 @@ class system_dns_resolver implements dns_resolver {
             return [$host];
         }
         $records = @dns_get_record($host, DNS_A + DNS_AAAA);
-        if ($records === false) {
-            return null;
-        }
         $out = [];
-        foreach ($records as $r) {
+        foreach (is_array($records) ? $records : [] as $r) {
             if (!empty($r['ip'])) {
                 $out[] = $r['ip'];
             } else if (!empty($r['ipv6'])) {
                 $out[] = $r['ipv6'];
             }
         }
-        return $out;
+        if (!$out) {
+            // The function dns_get_record() asks DNS servers only. The system resolver (which curl uses as well) also
+            // reads the hosts file; without this a name that curl reaches would be reported as a DNS failure.
+            $list = @gethostbynamel($host);
+            if (is_array($list)) {
+                $out = $list;
+            }
+        }
+        if (!$out) {
+            return $records === false ? null : [];
+        }
+        return array_values(array_unique($out));
     }
 }

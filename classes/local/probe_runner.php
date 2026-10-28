@@ -68,9 +68,21 @@ class probe_runner {
         if (!config::get('activechecks')) {
             throw new \moodle_exception('activechecksdisabled', 'tool_ltidiagnostics');
         }
+        $endpoints = self::probeable_endpoints($c);
+        $private = (bool) config::get('allowprivatetargets');
+        if (!$private) {
+            // A target on the exact allow-list is a private target as well, only a narrower exception.
+            foreach (array_merge(array_intersect_key($endpoints, array_flip($selected)), [$customurl]) as $url) {
+                $private = $private || ($url !== '' && \tool_ltidiagnostics\local\active\url_guard::exact_allowed($url));
+            }
+        }
+        if ($private) {
+            // Requests into private networks are a deliberate exception: an additional, separately granted capability
+            // is required and every run is audited.
+            require_capability('tool/ltidiagnostics:runprivatechecks', \context_system::instance());
+        }
         $checker = $checker ?? new active_checker();
         $results = [];
-        $endpoints = self::probeable_endpoints($c);
         foreach ($selected as $key) {
             if (!isset($endpoints[$key])) {
                 continue;
@@ -80,7 +92,7 @@ class probe_runner {
         if ($customurl !== '') {
             $results['custom'] = $checker->check($customurl, active_checker::PURPOSE_ENDPOINT, $now);
         }
-        audit::log('runchecks', $c->key, 'checks=' . count($results));
+        audit::log($private ? 'runchecks_private' : 'runchecks', $c->key, 'checks=' . count($results));
         return $results;
     }
 }

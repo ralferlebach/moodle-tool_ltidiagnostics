@@ -35,6 +35,11 @@ use tool_ltidiagnostics\local\observation_store;
  * @covers     \tool_ltidiagnostics\privacy\provider
  */
 final class provider_test extends provider_testcase {
+    // The privacy base test case declares tearDown() public.
+    use \tool_ltidiagnostics\tests\deprecation_guarded {
+        tearDown as public;
+    }
+
     /**
      * Create stored data for a user in every table that refers to a person.
      *

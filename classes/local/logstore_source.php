@@ -37,7 +37,13 @@ class logstore_source {
         '\core\event\user_graded',
         '\mod_lti\event\course_module_viewed',
         '\mod_lti\event\unknown_service_api_called',
+        // Optional tool_ltigroupautoenrol (>= 1.2.1): group assignment outcomes of LTI enrolments (GA-03). Absent events
+        // simply match nothing.
+        '\tool_ltigroupautoenrol\event\group_assignment_completed',
+        '\tool_ltigroupautoenrol\event\group_assignment_failed',
     ];
+    /** @var int Default look-back when no start time is given: every query is bounded by time (indexed column). */
+    public const DEFAULT_WINDOW = 7 * DAYSECS;
     /** @var string[] Events that are only relevant for users authenticated by auth_lti. */
     private const USER_EVENTS = ['\core\event\user_loggedin', '\core\event\user_created', '\core\event\user_updated'];
 
@@ -83,69 +89,163 @@ class logstore_source {
     }
 
     /**
-     * Fetch relevant events.
+     * Fetch relevant events from every logging reader.
+     *
+     * More than one log store can be enabled at the same time (for example the standard store and an external one).
+     * Every logging store is read through the reader API, the rows are merged and an event that several stores hold is
+     * reported once. A store that fails is reported in "readers" and does not hide the others.
+     *
+     * Two bounded queries per reader: the fixed list of core and mod_lti events, and the events of the LTI family
+     * ({@see family_events::PREFIXES}, matched on the component). Both are limited to a time window (default
+     * {@see self::DEFAULT_WINDOW} before "to" or now; timecreated is indexed in the standard store) and to "limit"
+     * rows each, so no query scans the whole log.
      *
      * @param \context $context Context in which the capability is checked.
-     * @param array $filters Optional: from, to (unix), courseid, limit (max 500), offset.
-     * @return array [available (bool), reason (string), rows (array)]. Rows newest first.
+     * @param array $filters Optional: from, to (unix), courseid, limit (max 500, per query), offset, family (bool, default
+     *        true).
+     * @return array [available (bool), reason (string), rows (array), readers (array), duplicates (int), truncated (bool),
+     *         familytruncated (bool), window (array from, to)]. Rows newest first, each with the name of the reader it
+     *         came from (a duplicate lists all readers); family rows carry correlationid, step, stage, direction, connkey.
      */
     public function fetch(\context $context, array $filters = []): array {
         global $DB;
         require_capability('tool/ltidiagnostics:view', $context);
+        $empty = ['available' => false, 'reason' => '', 'rows' => [], 'readers' => [], 'duplicates' => 0, 'truncated' => false,
+            'familytruncated' => false, 'window' => ['from' => 0, 'to' => 0]];
         $readers = $this->get_readers();
         if (!$readers) {
-            return ['available' => false, 'reason' => 'noreader', 'rows' => []];
+            return ['reason' => 'noreader'] + $empty;
         }
-        $reader = null;
-        foreach ($readers as $candidate) {
+        $logging = [];
+        foreach ($readers as $name => $candidate) {
             if ($candidate->is_logging()) {
-                $reader = $candidate;
-                break;
+                $logging[$name] = $candidate;
             }
         }
-        if ($reader === null) {
-            return ['available' => false, 'reason' => 'notlogging', 'rows' => []];
+        if (!$logging) {
+            return ['reason' => 'notlogging'] + $empty;
         }
         $limit = isset($filters['limit']) ? max(1, min(500, (int) $filters['limit'])) : 200;
         $offset = isset($filters['offset']) ? max(0, (int) $filters['offset']) : 0;
-        [$insql, $params] = $DB->get_in_or_equal(self::EVENTS, SQL_PARAMS_NAMED, 'en');
-        $where = 'eventname ' . $insql;
-        if (!empty($filters['from'])) {
-            $where .= ' AND timecreated >= :tfrom';
-            $params['tfrom'] = (int) $filters['from'];
-        }
-        if (!empty($filters['to'])) {
-            $where .= ' AND timecreated <= :tto';
-            $params['tto'] = (int) $filters['to'];
+        $to = !empty($filters['to']) ? (int) $filters['to'] : 0;
+        $from = !empty($filters['from']) ? (int) $filters['from'] : ($to ?: time()) - self::DEFAULT_WINDOW;
+        $common = ' AND timecreated >= :tfrom';
+        $cparams = ['tfrom' => $from];
+        if ($to) {
+            $common .= ' AND timecreated <= :tto';
+            $cparams['tto'] = $to;
         }
         if (!empty($filters['courseid'])) {
-            $where .= ' AND courseid = :cid';
-            $params['cid'] = (int) $filters['courseid'];
+            $common .= ' AND courseid = :cid';
+            $cparams['cid'] = (int) $filters['courseid'];
         }
-        try {
-            $events = $reader->get_events_select($where, $params, 'timecreated DESC', $offset, $limit);
-        } catch (\Throwable $e) {
-            return ['available' => false, 'reason' => 'readererror', 'rows' => []];
+        [$insql, $params] = $DB->get_in_or_equal(self::EVENTS, SQL_PARAMS_NAMED, 'en');
+        $queries = ['core' => ['eventname ' . $insql . $common, $params + $cparams]];
+        if ($filters['family'] ?? true) {
+            $likes = [];
+            $fparams = [];
+            foreach (family_events::PREFIXES as $i => $prefix) {
+                $likes[] = $DB->sql_like('component', ':fp' . $i);
+                $fparams['fp' . $i] = $DB->sql_like_escape($prefix) . '_%';
+            }
+            $queries['family'] = ['(' . implode(' OR ', $likes) . ')' . $common, $fparams + $cparams];
         }
-        $ltiusers = $this->lti_user_ids($events);
         $rows = [];
-        foreach ($events as $event) {
-            $data = $event->get_data();
-            if (in_array($data['eventname'], self::USER_EVENTS, true) && !isset($ltiusers[(int) $data['objectid']])) {
+        $summary = [];
+        $duplicates = 0;
+        $truncated = false;
+        $familytruncated = false;
+        foreach ($logging as $name => $reader) {
+            $events = [];
+            try {
+                foreach ($queries as $kind => [$where, $qparams]) {
+                    $found = $reader->get_events_select($where, $qparams, 'timecreated DESC', $offset, $limit);
+                    if (count($found) >= $limit) {
+                        if ($kind === 'family') {
+                            $familytruncated = true;
+                        } else {
+                            $truncated = true;
+                        }
+                    }
+                    $events = array_merge($events, array_values($found));
+                }
+            } catch (\Throwable $e) {
+                $summary[$name] = ['ok' => false, 'rows' => 0, 'reason' => 'readererror'];
                 continue;
             }
-            $rows[] = [
-                'source' => 'logstore',
-                'time' => (int) $data['timecreated'],
-                'eventname' => $data['eventname'],
-                'component' => $data['component'],
-                'courseid' => (int) $data['courseid'],
-                'contextid' => (int) $data['contextid'],
-                'objectid' => (int) $data['objectid'],
-                'userid' => (int) ($data['relateduserid'] ?? $data['userid']),
-            ];
+            $ltiusers = $this->lti_user_ids($events);
+            $count = 0;
+            $occurrence = [];
+            foreach ($events as $event) {
+                $data = $event->get_data();
+                if (in_array($data['eventname'], self::USER_EVENTS, true) && !isset($ltiusers[(int) $data['objectid']])) {
+                    continue;
+                }
+                $row = [
+                    'source' => 'logstore',
+                    'reader' => $name,
+                    'readers' => [$name],
+                    'time' => (int) $data['timecreated'],
+                    'eventname' => $data['eventname'],
+                    'component' => $data['component'],
+                    'courseid' => (int) $data['courseid'],
+                    'contextid' => (int) $data['contextid'],
+                    'objectid' => (int) $data['objectid'],
+                    'userid' => (int) ($data['relateduserid'] ?? $data['userid']),
+                    'family' => false,
+                    'correlationid' => '',
+                ];
+                if (family_events::is_family_component((string) $data['component'])) {
+                    $row = self::family_row($row, $data);
+                }
+                $count++;
+                // The same event held by two stores has the same name, second, context, object and user. Several equal
+                // events inside one store are different events: the n-th occurrence in one store matches the n-th in another.
+                $id = implode('|', [$row['eventname'], $row['time'], $row['contextid'], $row['objectid'], $row['userid'],
+                    $row['correlationid']]);
+                $occurrence[$id] = ($occurrence[$id] ?? 0) + 1;
+                $id .= '#' . $occurrence[$id];
+                if (isset($rows[$id])) {
+                    $rows[$id]['readers'][] = $name;
+                    $duplicates++;
+                    continue;
+                }
+                $rows[$id] = $row;
+            }
+            $summary[$name] = ['ok' => true, 'rows' => $count, 'reason' => ''];
         }
-        return ['available' => true, 'reason' => '', 'rows' => $rows];
+        if (!array_filter(array_column($summary, 'ok'))) {
+            return ['reason' => 'readererror', 'readers' => $summary] + $empty;
+        }
+        $rows = array_values($rows);
+        usort($rows, function (array $a, array $b) {
+            return $b['time'] <=> $a['time'];
+        });
+        return ['available' => true, 'reason' => '', 'rows' => $rows, 'readers' => $summary, 'duplicates' => $duplicates,
+            'truncated' => $truncated, 'familytruncated' => $familytruncated, 'window' => ['from' => $from, 'to' => $to]];
+    }
+
+    /**
+     * Add the family fields to a row: only correlation id, connection, version and code are taken from "other".
+     *
+     * @param array $row Base row.
+     * @param array $data Event data.
+     * @return array
+     */
+    private static function family_row(array $row, array $data): array {
+        $other = family_events::sanitise_other($data['other'] ?? []);
+        $class = family_events::classify((string) $data['eventname']);
+        return array_merge($row, [
+            'family' => true,
+            'correlationid' => $other['correlationid'],
+            'connectionid' => $other['connectionid'],
+            'version' => $other['version'],
+            'code' => $other['code'],
+            'step' => $class['step'],
+            'stage' => $class['stage'],
+            'direction' => $class['direction'],
+            'connkey' => family_events::connection_key((string) $data['component'], $other['connectionid']),
+        ]);
     }
 
     /**

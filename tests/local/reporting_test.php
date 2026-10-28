@@ -32,6 +32,8 @@ namespace tool_ltidiagnostics\local;
  * @covers     \tool_ltidiagnostics\task\cleanup_task
  */
 final class reporting_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /**
      * A small report fixture produced by the real report builder.
      *
@@ -87,7 +89,7 @@ final class reporting_test extends \advanced_testcase {
         $this->assertSame('excluded', $r['meta']['payloads']);
         $this->assertSame(5, $r['filters']->courseid);
         $this->assertSame(support::diagnostic_id('tool:3:4'), $r['meta']['diagnosticid']);
-        $this->assertCount(5, $r['limits']);
+        $this->assertCount(6, $r['limits']);
         $this->assertSame(finding::layers(), array_keys($r['layers']));
     }
 
@@ -160,7 +162,7 @@ final class reporting_test extends \advanced_testcase {
         $report = $this->report();
         $report['matrix'][0]['label'] = '=HYPERLINK("http://evil.example","x")';
         $csv = report_exporter::to_csv($report);
-        $rows = array_map('str_getcsv', array_filter(explode("\n", $csv)));
+        $rows = array_map(fn(string $line): array => str_getcsv($line, ',', '"', '\\'), array_filter(explode("\n", $csv)));
         $header = array_shift($rows);
         $this->assertSame('section', $header[0]);
         foreach ($rows as $row) {
@@ -347,6 +349,8 @@ final class reporting_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
         set_config('retentiondays', 10, 'tool_ltidiagnostics');
+        // Since 0.3.0 imported lines and jobs have their own retention (the upgrade starts it with retentiondays).
+        set_config('retentionaccdays', 10, 'tool_ltidiagnostics');
         $old = time() - 11 * DAYSECS;
         $new = time() - 1 * DAYSECS;
         observation_store::record(['eventtype' => 'launch', 'eventname' => 'old', 'timecreated' => $old]);

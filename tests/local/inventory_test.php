@@ -34,6 +34,8 @@ require_once(__DIR__ . '/../fixtures/lti_data.php');
  * @covers     \tool_ltidiagnostics\local\resolver
  */
 final class inventory_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     use lti_data;
 
     /**

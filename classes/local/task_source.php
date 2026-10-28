@@ -156,4 +156,96 @@ class task_source {
         }
         return $out;
     }
+
+    /**
+     * How far back the task log can reach.
+     *
+     * Moodle keeps only the newest N runs per task ("task_logretainruns"). Once an LTI task has N entries, older runs
+     * are gone, so an empty result for an earlier period proves nothing.
+     *
+     * @return array retainruns (int), count (int), oldest (int, 0 if none), newest (int), saturated (bool)
+     */
+    public function coverage(): array {
+        global $CFG, $DB;
+        $retain = (int) ($CFG->task_logretainruns ?? 0);
+        $likes = [];
+        $params = [];
+        foreach (self::PREFIXES as $i => $c) {
+            $likes[] = $DB->sql_like('classname', ':k' . $i, false);
+            $params['k' . $i] = '%' . $DB->sql_like_escape($c) . '%';
+        }
+        $rows = $DB->get_records_sql(
+            'SELECT classname, COUNT(1) AS runs, MIN(timestart) AS oldest, MAX(timestart) AS newest FROM {task_log} WHERE ('
+            . implode(' OR ', $likes) . ') GROUP BY classname',
+            $params
+        );
+        $count = 0;
+        $oldest = 0;
+        $newest = 0;
+        $saturated = false;
+        foreach ($rows as $r) {
+            $count += (int) $r->runs;
+            $oldest = $oldest === 0 ? (int) $r->oldest : min($oldest, (int) $r->oldest);
+            $newest = max($newest, (int) $r->newest);
+            $saturated = $saturated || ($retain > 0 && (int) $r->runs >= $retain);
+        }
+        return ['retainruns' => $retain, 'count' => $count, 'oldest' => $oldest, 'newest' => $newest, 'saturated' => $saturated];
+    }
+
+    /**
+     * Cron windows: periods in which any scheduled or ad hoc task ran, merged from the task log (all components, the
+     * cron runs core tasks every minute), and the gaps between them. A gap longer than the threshold is a period
+     * without cron. The query is bounded (indexed column timestart, at most $limit rows, the newest first); when the
+     * limit is reached the result says so and the earliest part of the period stays unknown.
+     *
+     * @param int $from Start (unix time).
+     * @param int $to End (unix time).
+     * @param int $gap Smallest gap that counts (seconds).
+     * @param int $limit Row limit.
+     * @return array windows (list of [start, end]), gaps (list of [start, end]), rows (int), truncated (bool),
+     *         coveredfrom (int: the earliest time the answer is complete for)
+     */
+    public function cron_windows(int $from, int $to, int $gap = 3600, int $limit = 5000): array {
+        global $DB;
+        $limit = max(10, min(20000, $limit));
+        $rs = $DB->get_recordset_select(
+            'task_log',
+            'timestart >= :tfrom AND timestart <= :tto',
+            ['tfrom' => $from, 'tto' => $to],
+            'timestart DESC',
+            'id, timestart, timeend',
+            0,
+            $limit
+        );
+        $runs = [];
+        foreach ($rs as $r) {
+            $runs[] = [(int) floor((float) $r->timestart), (int) ceil(max((float) $r->timeend, (float) $r->timestart))];
+        }
+        $rs->close();
+        $truncated = count($runs) >= $limit;
+        $runs = array_reverse($runs);
+        $coveredfrom = $truncated && $runs ? $runs[0][0] : $from;
+        $windows = [];
+        foreach ($runs as [$start, $end]) {
+            $n = count($windows);
+            if ($n && $start - $windows[$n - 1][1] < $gap) {
+                $windows[$n - 1][1] = max($windows[$n - 1][1], $end);
+            } else {
+                $windows[] = [$start, $end];
+            }
+        }
+        $gaps = [];
+        $cursor = $coveredfrom;
+        foreach ($windows as [$start, $end]) {
+            if ($start - $cursor >= $gap) {
+                $gaps[] = [$cursor, $start];
+            }
+            $cursor = max($cursor, $end);
+        }
+        if ($to - $cursor >= $gap) {
+            $gaps[] = [$cursor, $to];
+        }
+        return ['windows' => $windows, 'gaps' => $gaps, 'rows' => count($runs), 'truncated' => $truncated,
+            'coveredfrom' => $coveredfrom];
+    }
 }

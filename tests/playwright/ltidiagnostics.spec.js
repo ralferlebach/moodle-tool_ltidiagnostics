@@ -24,12 +24,17 @@
  * 4. Admin A's matrix still does not show AGS or NRPS as "verified" (no service call was observed).
  * 5. Access control: a student cannot open the diagnostics page.
  *
+ * Independence: the spec owns the diagnostic state it asserts on. Before it starts it removes stored active check
+ * results and recorded observations of the two connections (another spec, for example the accessibility spec,
+ * may have run the health check, whose stored probe would mark AGS as "blocked"); it does not rely on spec order.
+ *
  * The test reads LTI_SEED (default /home/claude/e2e/state/seed.json). Set LTI_IGNORE_TLS=1 when the CA is not trusted
  * by the browser.
  */
 
 const { test, expect } = require('@playwright/test');
-const { loadSeed, getUser, login, connectionUrl } = require('./lib');
+const { loadSeed, getUser, login, connectionUrl, resetConnectionState } = require('./lib');
+const e2e = require(process.env.E2E_LIB || '/home/claude/e2e/lib/e2e');
 
 const seed = loadSeed();
 const siteA = seed.urls.a;
@@ -39,16 +44,27 @@ const toolKey = `tool:${seed.lti.registration_on_b.id}:${seed.lti.registration_o
 
 test.describe.configure({ mode: 'serial' });
 
+test.beforeAll(() => {
+  resetConnectionState('a', platformKey, { probes: true, observations: true });
+  resetConnectionState('b', toolKey, { probes: true, observations: true });
+});
+
 test('platform matrix shows AGS and NRPS configured, not verified, before any launch', async ({ page }) => {
   await login(page, siteA, seed.admins.a);
   await page.goto(connectionUrl(siteA, platformKey, 'matrix'));
   const matrix = page.locator('#tool_ltidiagnostics_matrix');
   await expect(matrix).toBeVisible();
+  const typeid = Number(seed.lti.platform.type_id);
   for (const feature of ['ags', 'nrps']) {
+    // Same rule as fact_collector::platform_tokens(): any stored token with the service scope.
+    const tokens = parseInt(e2e.sqlA(`SELECT COUNT(*) FROM mdl_lti_access_tokens WHERE typeid = ${typeid}`
+      + ` AND scope LIKE '%lti-${feature}%'`), 10);
     const row = matrix.locator(`tr[data-feature="${feature}"]`);
     await expect(row).toHaveCount(1);
     await expect(row).not.toHaveAttribute('data-status', 'verified');
-    await expect(row).toHaveAttribute('data-status', 'configured');
+    // On the shared stack other suites may have obtained an access token for this type (for example completion sync):
+    // a stored token makes a configured service "authorised", still not verified (status engine rule).
+    await expect(row).toHaveAttribute('data-status', tokens > 0 ? 'authorised' : 'configured');
   }
 });
 

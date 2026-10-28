@@ -26,6 +26,8 @@ namespace tool_ltidiagnostics\local\active;
  * @covers     \tool_ltidiagnostics\local\active\url_guard
  */
 final class url_guard_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /**
      * Addresses that must be refused.
      *
@@ -75,6 +77,52 @@ final class url_guard_test extends \advanced_testcase {
             'dot internal' => ['https://metadata.internal/jwks', 'blocked'],
             'trailing dot localhost' => ['https://localhost./jwks', 'blocked'],
             'upper case' => ['https://LOCALHOST/jwks', 'blocked'],
+            // IPv6 forms that embed or tunnel an IPv4 address (the audit item DIA-04).
+            'ipv4 mapped hex' => ['https://[::ffff:7f00:1]/jwks', 'blocked'],
+            'ipv4 mapped private hex' => ['https://[::ffff:a00:1]/jwks', 'blocked'],
+            'ipv4 compatible' => ['https://[::7f00:1]/jwks', 'blocked'],
+            'nat64 loopback' => ['https://[64:ff9b::7f00:1]/jwks', 'blocked'],
+            'nat64 metadata' => ['https://[64:ff9b::a9fe:a9fe]/jwks', 'blocked'],
+            'nat64 local use' => ['https://[64:ff9b:1::1]/jwks', 'blocked'],
+            '6to4 loopback' => ['https://[2002:7f00:1::]/jwks', 'blocked'],
+            '6to4 private' => ['https://[2002:c0a8:101::1]/jwks', 'blocked'],
+            'teredo' => ['https://[2001::1]/jwks', 'blocked'],
+            'documentation v6' => ['https://[2001:db8::1]/jwks', 'blocked'],
+            'site local v6' => ['https://[fec0::1]/jwks', 'blocked'],
+            'discard v6' => ['https://[100::1]/jwks', 'blocked'],
+            'multicast v6' => ['https://[ff02::1]/jwks', 'blocked'],
+            'ec2 metadata v6' => ['https://[fd00:ec2::254]/latest/meta-data', 'blocked'],
+            'unspecified v6' => ['https://[::]/jwks', 'blocked'],
+            'mixed case v6' => ['https://[FE80::1]/jwks', 'blocked'],
+            // IPv4 spelled as one number, in short form, in octal or hexadecimal.
+            'decimal metadata' => ['https://2852039166/latest/meta-data', 'blocked'],
+            'short loopback' => ['https://127.1/jwks', 'blocked'],
+            'short private' => ['https://10.1/jwks', 'blocked'],
+            'hex dotted' => ['https://0x7f.0.0.1/jwks', 'blocked'],
+            'octal long' => ['https://0177.0.0.01/jwks', 'blocked'],
+            'octal private' => ['https://012.0.0.1/jwks', 'blocked'],
+            'trailing dot ip' => ['https://127.0.0.1./jwks', 'blocked'],
+            'zero host' => ['https://0/jwks', 'malformed'],
+            'documentation v4' => ['https://192.0.2.1/jwks', 'blocked'],
+            'multicast v4' => ['https://224.0.0.1/jwks', 'blocked'],
+            'broadcast' => ['https://255.255.255.255/jwks', 'blocked'],
+            'localhost subdomain' => ['https://app.localhost/jwks', 'blocked'],
+            'localdomain' => ['https://host.localdomain/jwks', 'blocked'],
+            // Parser differentials and encodings.
+            'backslash authority' => ['https://example.org\\@127.0.0.1/jwks', 'malformed'],
+            'at sign authority' => ['https://example.org@127.0.0.1/jwks', 'credentials'],
+            'empty user' => ['https://@127.0.0.1/jwks', 'credentials'],
+            'percent encoded dot' => ['https://127.0.0.1%2e/jwks', 'host'],
+            'percent encoded host' => ['https://%6c%6f%63%61%6c%68%6f%73%74/jwks', 'host'],
+            'unicode dots' => ['https://127。0。0。1/jwks', 'host'],
+            'fullwidth digits' => ['https://１２７.０.０.１/jwks', 'host'],
+            'newline' => ["https://example.org/jwks\nHost: 127.0.0.1", 'malformed'],
+            'tab' => ["https://example.org/\tjwks", 'malformed'],
+            'port zero' => ['https://example.org:0/jwks', 'malformed'],
+            'port too large' => ['https://example.org:70000/jwks', 'malformed'],
+            'javascript' => ['javascript://example.org/%0aalert(1)', 'scheme'],
+            'gopher' => ['gopher://example.org/', 'scheme'],
+            'scheme relative' => ['//example.org/jwks', 'malformed'],
         ];
     }
 
@@ -145,6 +193,30 @@ final class url_guard_test extends \advanced_testcase {
             ['fe80::abcd', true],
             ['ff02::1', true],
             ['not an address', true],
+            ['::ffff:7f00:1', true],
+            ['::ffff:0808:0808', false],
+            ['64:ff9b::7f00:1', true],
+            ['64:ff9b::808:808', false],
+            ['64:ff9b:1::1', true],
+            ['2002:7f00:1::', true],
+            ['2002:a00:1::', true],
+            ['2002:808:808::1', false],
+            ['2001::1', true],
+            ['2001:db8::1', true],
+            ['fec0::1', true],
+            ['100::1', true],
+            ['::7f00:1', true],
+            ['2606:4700:4700::1111', false],
+            ['224.0.0.1', true],
+            ['192.0.2.7', true],
+            ['198.51.100.7', true],
+            ['203.0.113.7', true],
+            ['192.88.99.1', true],
+            ['100.127.255.255', true],
+            ['100.128.0.1', false],
+            ['198.19.255.255', true],
+            ['198.20.0.1', false],
+            ['1.1.1.1', false],
         ];
     }
 

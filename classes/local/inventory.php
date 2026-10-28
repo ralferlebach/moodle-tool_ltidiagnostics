@@ -133,6 +133,8 @@ class inventory {
                 'sendemail' => (int) ($config['sendemailaddr'] ?? 0),
                 'acceptgrades' => (int) ($config['acceptgrades'] ?? 0),
                 'hasredirects' => (int) !empty($config['redirectionuris']),
+                // Names (never values) of the custom parameters of the type.
+                'customkeys' => self::custom_keys((string) ($config['customparameters'] ?? '')),
                 'services' => $this->service_names(),
             ];
             $out[] = $c;
@@ -255,5 +257,28 @@ class inventory {
         }
         $rs->close();
         return $out;
+    }
+
+    /**
+     * Names of custom parameters ("name=value" per line). Values are never returned.
+     *
+     * @param string $text Custom parameter text.
+     * @return string[]
+     */
+    public static function custom_keys(string $text): array {
+        $keys = [];
+        foreach (preg_split('/[\r\n;]+/', $text) as $line) {
+            $pos = strpos($line, '=');
+            if ($pos === false) {
+                continue;
+            }
+            $key = clean_param(trim(substr($line, 0, $pos)), PARAM_ALPHANUMEXT);
+            if ($key !== '') {
+                $keys[] = \core_text::strtolower($key);
+            }
+        }
+        $keys = array_values(array_unique($keys));
+        sort($keys);
+        return $keys;
     }
 }

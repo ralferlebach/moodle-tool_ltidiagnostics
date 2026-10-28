@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="admin/tool/ltidiagnostics/db" VERSION="20261024" COMMENT="XMLDB file for Moodle admin/tool/ltidiagnostics"
+<XMLDB PATH="admin/tool/ltidiagnostics/db" VERSION="2026102700" COMMENT="XMLDB file for Moodle admin/tool/ltidiagnostics"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="../../../../lib/xmldb/xmldb.xsd"
 >
@@ -22,6 +22,7 @@
         <FIELD NAME="entrypoint" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false" COMMENT="web, lti_services, cli, ws or other"/>
         <FIELD NAME="fieldnames" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Names (never values) of the event other-data keys"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="UTC unix time"/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="other[correlationid] of an LTI family transfer event, else null"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -32,6 +33,7 @@
         <INDEX NAME="course_time" UNIQUE="false" FIELDS="courseid, timecreated"/>
         <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
         <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="correlationid" UNIQUE="false" FIELDS="correlationid"/>
       </INDEXES>
     </TABLE>
     <TABLE NAME="tool_ltidiagnostics_audit" COMMENT="Audit of views and exports of diagnostic data">
@@ -111,6 +113,7 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="fingerprint" UNIQUE="false" FIELDS="fingerprint"/>
+        <INDEX NAME="user_time" UNIQUE="false" FIELDS="userid, timecreated" COMMENT="Import rate limit per user"/>
       </INDEXES>
     </TABLE>
     <TABLE NAME="tool_ltidiagnostics_acc" COMMENT="Redacted, LTI related web server log lines">
@@ -127,7 +130,7 @@
         <FIELD NAME="ipmask" TYPE="char" LENGTH="45" NOTNULL="true" SEQUENCE="false" COMMENT="Truncated client address, never used alone for correlation"/>
         <FIELD NAME="viaproxy" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="requestid" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false"/>
-        <FIELD NAME="category" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="category" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false" COMMENT="One of parser::CATEGORIES"/>
         <FIELD NAME="message" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Redacted error log message"/>
       </FIELDS>
       <KEYS>
@@ -138,6 +141,7 @@
         <INDEX NAME="logtime" UNIQUE="false" FIELDS="logtime"/>
         <INDEX NAME="requestid" UNIQUE="false" FIELDS="requestid"/>
         <INDEX NAME="importid" UNIQUE="false" FIELDS="importid"/>
+        <INDEX NAME="category_time" UNIQUE="false" FIELDS="category, logtime" COMMENT="Bounded queries per category and time window"/>
       </INDEXES>
     </TABLE>
   </TABLES>

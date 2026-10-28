@@ -32,6 +32,8 @@ namespace tool_ltidiagnostics\local;
  * @covers     \tool_ltidiagnostics\local\desired_profile
  */
 final class matrix_health_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /** @var int Fixed "now". */
     private const NOW = 1792800000;
 

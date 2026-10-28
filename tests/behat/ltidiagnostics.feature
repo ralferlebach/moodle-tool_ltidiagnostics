@@ -48,3 +48,36 @@ Feature: LTI diagnostics is a read-only administration tool with its own capabil
     Given I log in as "admin"
     When I visit "/admin/tool/ltidiagnostics/index.php?search=zzz-no-such-connection"
     Then I should see "LTI connections"
+
+  Scenario: The health check of a connection states what was checked and what cannot be seen
+    Given the following "mod_lti > tool types" exist:
+      | name      | baseurl                          | coursevisible | state |
+      | Diag tool | https://tool.example.org/launch  | 2             | 1     |
+    And I log in as "admin"
+    When I visit "/admin/tool/ltidiagnostics/index.php"
+    And I click on "Open" "link" in the "Diag tool" "table_row"
+    And I click on "Health check" "link"
+    Then I should see "What was checked"
+    And I should see "Traffic light per layer"
+    And I should see "What can be seen"
+
+  Scenario: The connection list is a table with a caption and scoped column headers
+    Given the following "mod_lti > tool types" exist:
+      | name      | baseurl                          | coursevisible | state |
+      | Diag tool | https://tool.example.org/launch  | 2             | 1     |
+    And I log in as "admin"
+    When I visit "/admin/tool/ltidiagnostics/index.php"
+    Then "table caption" "css_element" should exist
+    And "th[scope='col']" "css_element" should exist
+
+  Scenario: The capability matrix and the evidence tab are reachable by link and show their tables
+    Given the following "mod_lti > tool types" exist:
+      | name      | baseurl                          | coursevisible | state |
+      | Diag tool | https://tool.example.org/launch  | 2             | 1     |
+    And I log in as "admin"
+    When I visit "/admin/tool/ltidiagnostics/index.php"
+    And I click on "Open" "link" in the "Diag tool" "table_row"
+    Then I should see "Capability matrix"
+    When I click on "Evidence sources" "link"
+    Then I should see "What can be seen"
+    And "th[scope='col']" "css_element" should exist

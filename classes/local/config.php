@@ -38,6 +38,13 @@ class config {
         'allowprivatetargets' => 0,
         'clockwindow' => 120,
         'diagmodemaxminutes' => 240,
+        // Since 0.3.0: retention per data class (days), import rate limit, exact private targets.
+        'retentionaccdays' => 30,
+        'retentionauditdays' => 365,
+        'retentionsnapdays' => 365,
+        'retentionpartnerdays' => 30,
+        'importratelimit' => 10,
+        'privatetargetallowlist' => '',
     ];
 
     /**

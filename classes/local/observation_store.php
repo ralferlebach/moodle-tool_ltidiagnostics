@@ -29,6 +29,8 @@ namespace tool_ltidiagnostics\local;
 class observation_store {
     /** @var string Table name. */
     private const TABLE = 'tool_ltidiagnostics_obs';
+    /** @var string Event type of an observed LTI family transfer event. */
+    public const FAMILY_EVENT = 'family_event';
     /** @var string|null Trace id of the current request. */
     private static $traceid = null;
 
@@ -79,6 +81,9 @@ class observation_store {
             'timecreated' => time(),
         ]);
         $row->eventname = \core_text::substr((string) $row->eventname, 0, 255);
+        if (isset($row->correlationid) && $row->correlationid === '') {
+            $row->correlationid = null;
+        }
         return (int) $DB->insert_record(self::TABLE, $row);
     }
 

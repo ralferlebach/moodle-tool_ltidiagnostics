@@ -4,7 +4,8 @@
 
 * Frankenstyle: type prefix + `_` + name; name lowercase letters and digits only, starting with a letter, no underscore.
 * The DB table prefix is the full component name plus `_` (`tool_ltidiagnostics_`, 20 characters). An XMLDB table name
-  may have at most 28 characters including that prefix, so the free part is at most 8 characters. The tables are `obs`,
+  may have at most `xmldb_table::NAME_MAX_LENGTH = 63 - 10 = 53` characters in 4.5 and 5.3 (the old 28-character limit
+  no longer applies); the short suffixes keep every name within the historical 28 anyway. The tables are `obs`,
   `audit`, `snap`, `imp`, `acc`, `profile` (the longest, `tool_ltidiagnostics_profile`, has 27 characters).
 * The type must fit: admin tools live under `admin/tool/<name>` and show up in *Plugins > Admin tools*.
 
@@ -20,5 +21,5 @@
 
 ## Recommendation
 
-Keep **`tool_ltidiagnostics`** (1): correct type, clearest name, consistent with the family, and the 28-character limit
+Keep **`tool_ltidiagnostics`** (1): correct type, clearest name, consistent with the family, and short table names (within the historical 28-character limit)
 is met by the chosen table names. If more tables are needed, short names (up to 8 characters) must be used.

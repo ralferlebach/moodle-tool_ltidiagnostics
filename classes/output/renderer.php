@@ -37,8 +37,10 @@ class renderer extends \plugin_renderer_base {
      * @return string
      */
     public static function badge_class(string $light): string {
-        $map = ['green' => 'bg-success', 'amber' => 'bg-warning text-dark', 'red' => 'bg-danger', 'grey' => 'bg-secondary'];
-        return $map[$light] ?? 'bg-secondary';
+        // The text colour is set explicitly: Moodle 4.5 (Bootstrap 4) and 5.x (Bootstrap 5) differ in the default badge colour.
+        $map = ['green' => 'bg-success text-white', 'amber' => 'bg-warning text-dark', 'red' => 'bg-danger text-white',
+            'grey' => 'bg-secondary text-dark'];
+        return $map[$light] ?? 'bg-secondary text-dark';
     }
 
     /**
@@ -164,21 +166,14 @@ class renderer extends \plugin_renderer_base {
             ];
         }
         $buckets = [];
+        $root = null;
         foreach ($result['findings'] as $f) {
             $str = $f->strings();
-            $buckets[$f->severity][] = [
-                'severity' => $f->severity,
-                'testid' => $f->testid,
-                'title' => $str['title'],
-                'layer' => get_string('layer_' . $f->layer, 'tool_ltidiagnostics'),
-                'responsible' => get_string('responsible_' . $f->responsible, 'tool_ltidiagnostics'),
-                'detail' => $str['detail'],
-                'fix' => $str['fix'],
-                'risklabel' => get_string('risk_' . $f->risk, 'tool_ltidiagnostics'),
-                'verify' => $str['verify'],
-                'evidence' => get_string('kind_' . $f->evidencekind, 'tool_ltidiagnostics')
-                    . ($f->confidence !== '' ? ' / ' . $f->confidence : ''),
-            ];
+            $entry = $this->finding_context($f, $str);
+            if (!empty($result['rootcause']) && $result['rootcause'] === $f) {
+                $root = $entry;
+            }
+            $buckets[$f->severity][] = $entry;
         }
         $groups = [];
         foreach ([finding::BLOCKING, finding::WARNING, finding::NOTCHECKED, finding::INFO, finding::OK] as $sev) {
@@ -191,8 +186,15 @@ class renderer extends \plugin_renderer_base {
                 'intervention' => get_string('intervention', 'tool_ltidiagnostics'),
                 'risk' => get_string('risk', 'tool_ltidiagnostics'),
                 'verification' => get_string('verification', 'tool_ltidiagnostics'),
+                'where' => get_string('wherelabel', 'tool_ltidiagnostics'),
+                'alt' => get_string('alternativecause', 'tool_ltidiagnostics'),
+                'uncertain' => get_string('uncertainlabel', 'tool_ltidiagnostics'),
+                'responsible' => get_string('responsible', 'tool_ltidiagnostics'),
+                'consequence' => get_string('consequencenote', 'tool_ltidiagnostics'),
             ],
             'headings' => [
+                'rootcause' => get_string('hc_rootcause', 'tool_ltidiagnostics'),
+                'observability' => get_string('obs_heading', 'tool_ltidiagnostics'),
                 'progress' => get_string('hc_progress', 'tool_ltidiagnostics'),
                 'layers' => get_string('hc_layers', 'tool_ltidiagnostics'),
                 'findings' => get_string('hc_findings', 'tool_ltidiagnostics'),
@@ -200,8 +202,298 @@ class renderer extends \plugin_renderer_base {
             ],
             'progress' => $progress,
             'layers' => $layers,
+            'rootcause' => $root,
+            'norootcause' => $root === null ? get_string('hc_norootcause', 'tool_ltidiagnostics') : '',
             'groups' => $groups,
+            'observability' => $this->observability_table($result['observability'] ?? []),
         ]);
+    }
+
+    /**
+     * Template context of one finding.
+     *
+     * @param finding $f Finding.
+     * @param array $str Strings of the finding.
+     * @return array
+     */
+    private function finding_context(finding $f, array $str): array {
+        return [
+            'severity' => $f->severity,
+            'severitylabel' => get_string('severity_' . $f->severity, 'tool_ltidiagnostics'),
+            'testid' => $f->testid,
+            'title' => $str['title'],
+            'layer' => get_string('layer_' . $f->layer, 'tool_ltidiagnostics'),
+            'responsible' => get_string('responsible_' . $f->responsible, 'tool_ltidiagnostics'),
+            'detail' => $str['detail'],
+            'fix' => $str['fix'],
+            'risklabel' => get_string('risk_' . $f->risk, 'tool_ltidiagnostics'),
+            'verify' => $str['verify'],
+            'where' => $str['where'],
+            'uncertain' => $str['uncertain'],
+            'alt' => $str['alt'],
+            'consequence' => $f->consequence,
+            'evidence' => get_string('kind_' . $f->evidencekind, 'tool_ltidiagnostics')
+                . ($f->confidence !== '' ? ' / ' . $f->confidence : ''),
+            'system' => $f->system,
+            'systemlabel' => get_string('system_' . $f->system, 'tool_ltidiagnostics'),
+            'certainty' => $f->certainty,
+            'certaintylabel' => get_string('certainty_' . $f->certainty, 'tool_ltidiagnostics'),
+            'check' => $f->diagnosis()['check'],
+        ];
+    }
+
+    /**
+     * Messages tab (DIA-02): status of every data direction and protocol message, the end-to-end chains and the field
+     * matrix of the launch message.
+     *
+     * @param array $result Result of health_check::evaluate().
+     * @return string
+     */
+    public function messages_tab(array $result): string {
+        $t = function (string $id, $a = null): string {
+            return get_string($id, 'tool_ltidiagnostics', $a);
+        };
+        $out = \html_writer::tag('p', $t('msg_intro'), ['class' => 'text-muted']);
+        if (!empty($result['partner'])) {
+            $out .= \html_writer::tag('p', $t('msg_partnerinfo', (object) [
+                'id' => s($result['partner']['diagnosticid']),
+                'generated' => s($result['partner']['generated']),
+            ]), ['class' => 'alert alert-info', 'id' => 'tool_ltidiagnostics_partnerinfo']);
+        }
+        $rows = [];
+        foreach ($result['messages'] ?? [] as $m) {
+            $head = new \html_table_cell($t('msg_' . $m['id']));
+            $head->header = true;
+            $head->scope = 'row';
+            $observed = $t('obslevel_' . $m['observed']) . ($m['seen'] ? ' - ' . userdate($m['seen']) : '');
+            if ($m['transportonly']) {
+                $observed .= ' ' . $t('msg_transportonly');
+            }
+            if ($m['paged'] > 0) {
+                $observed .= ' ' . $t('msg_paged', $m['paged']);
+            }
+            $light = self::state_light($m['state']);
+            $state = \html_writer::span($t('msgstate_' . $m['state']), 'badge ' . self::badge_class($light));
+            if ($m['limit'] !== '') {
+                $state .= ' ' . \html_writer::span($t('msglimit_' . $m['limit']), 'small text-muted');
+            }
+            if ($m['missingscopes']) {
+                $state .= ' ' . \html_writer::span($t('msg_missingscopes', s(implode(', ', $m['missingscopes']))), 'small');
+            }
+            $row = new \html_table_row([$head, $t('msgdir_' . $m['direction']), $t('msgconf_' . $m['configured']), $observed,
+                $m['verified'] ? $t('yes') : $t('no'), $t('msgbooked_' . $m['booked']), $state]);
+            $row->attributes['data-message'] = $m['id'];
+            $row->attributes['data-state'] = $m['state'];
+            $row->attributes['data-verified'] = $m['verified'] ? '1' : '0';
+            $row->attributes['data-booked'] = $m['booked'];
+            $rows[] = $row;
+        }
+        $table = new \html_table();
+        $table->id = 'tool_ltidiagnostics_messages';
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->caption = $t('report_messages');
+        $table->captionhide = true;
+        $table->head = [$t('msg_message'), $t('direction'), $t('msg_configured'), $t('msg_observed'), $t('msg_verified'),
+            $t('msg_booked'), $t('msg_state')];
+        $table->data = $rows;
+        $out .= $this->heading($t('report_messages'), 3) . \html_writer::div(\html_writer::table($table), 'table-responsive');
+
+        $items = '';
+        foreach ($result['chains'] ?? [] as $ch) {
+            $text = \html_writer::span($t('verdict_' . $ch['verdict']), 'badge '
+                . self::badge_class($ch['verdict'] === 'end_to_end' ? 'green' : ($ch['verdict'] === 'failed' ? 'red'
+                : ($ch['verdict'] === 'not_configured' ? 'grey' : 'amber')))) . ' ' . $t('chain_' . $ch['id']);
+            if ($ch['weakest'] !== '') {
+                $text .= ' - ' . $t('msg_' . $ch['weakest']) . ': ' . $t('chainreason_' . $ch['reason']);
+            }
+            $items .= \html_writer::tag('li', $text, ['data-chain' => $ch['id'], 'data-verdict' => $ch['verdict']]);
+        }
+        $out .= $this->heading($t('report_chains'), 3) . \html_writer::tag('p', $t('chain_intro'), ['class' => 'text-muted'])
+            . \html_writer::tag('ul', $items, ['id' => 'tool_ltidiagnostics_chains', 'class' => 'list-unstyled']);
+
+        $rows = [];
+        foreach ($result['fields'] ?? [] as $f) {
+            $head = new \html_table_cell(s($f['field']));
+            $head->header = true;
+            $head->scope = 'row';
+            $row = new \html_table_row([$head, $t('fieldcat_' . $f['category']), $t('fieldstate_' . $f['local']),
+                $f['partner'] !== '' ? $t('fieldstate_' . $f['partner']) : $t('field_nopartner'),
+                $t('fieldagree_' . $f['agreement'])]);
+            $row->attributes['data-field'] = $f['field'];
+            $row->attributes['data-local'] = $f['local'];
+            $row->attributes['data-agreement'] = $f['agreement'];
+            $rows[] = $row;
+        }
+        $table = new \html_table();
+        $table->id = 'tool_ltidiagnostics_fields';
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->caption = $t('report_fields');
+        $table->captionhide = true;
+        $table->head = [$t('field'), $t('fieldcategory'), $t('field_local'), $t('field_partner'), $t('field_agreement')];
+        $table->data = $rows;
+        $out .= $this->heading($t('report_fields'), 3) . \html_writer::tag('p', $t('field_intro'), ['class' => 'text-muted'])
+            . \html_writer::div(\html_writer::table($table), 'table-responsive');
+        return $out;
+    }
+
+    /**
+     * Findings as a table with the four parts of a diagnosis: cause, uncertainty, responsible system, safe check.
+     *
+     * @param \tool_ltidiagnostics\local\finding[] $findings Findings.
+     * @param string $id Table id.
+     * @return string
+     */
+    public function findings_table(array $findings, string $id): string {
+        $t = function (string $sid, $a = null): string {
+            return get_string($sid, 'tool_ltidiagnostics', $a);
+        };
+        $rows = [];
+        foreach ($findings as $f) {
+            $d = $f->diagnosis();
+            $head = new \html_table_cell(\html_writer::span($t('severity_' . $f->severity), 'badge '
+                . self::badge_class($f->severity === 'ok' ? 'green' : ($f->severity === 'blocking' ? 'red' : 'amber')))
+                . ' ' . s($d['cause']));
+            $head->header = true;
+            $head->scope = 'row';
+            $row = new \html_table_row([$head, s($d['detail']), $t('system_' . $d['system']), $t('certainty_' . $d['certainty'])
+                . ' - ' . s($d['uncertainty']), s($d['check'])]);
+            $row->attributes['data-code'] = $f->code;
+            $row->attributes['data-system'] = $f->system;
+            $row->attributes['data-certainty'] = $f->certainty;
+            $rows[] = $row;
+        }
+        $table = new \html_table();
+        $table->id = $id;
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->caption = $t('hc_findings');
+        $table->captionhide = true;
+        $table->head = [$t('diag_cause'), $t('detail'), $t('systemlabel'), $t('uncertainlabel'), $t('checklabel')];
+        $table->data = $rows;
+        return \html_writer::div(\html_writer::table($table), 'table-responsive');
+    }
+
+    /**
+     * Traffic light of a message state.
+     *
+     * @param string $state State.
+     * @return string green, amber, red or grey
+     */
+    public static function state_light(string $state): string {
+        $map = ['booked' => 'green', 'verified' => 'green', 'observed' => 'amber', 'configured' => 'amber',
+            'failed' => 'red', 'not_configured' => 'grey', 'not_observable' => 'grey'];
+        return $map[$state] ?? 'grey';
+    }
+
+    /**
+     * Completion sync transfer report (DIA-05).
+     *
+     * @param array $report Result of transfer_report::build().
+     * @return string
+     */
+    public function transfers(array $report): string {
+        $t = function (string $id, $a = null): string {
+            return get_string($id, 'tool_ltidiagnostics', $a);
+        };
+        $out = \html_writer::tag('p', $t('transfers_intro'), ['class' => 'text-muted']);
+        $mode = $t('transfers_mode_' . $report['mode']);
+        $out .= \html_writer::tag('p', $t('transfers_side') . ': ' . $t('transfers_side_' . $report['side']) . ' &middot; '
+            . $t('transfers_mode') . ': ' . $mode, ['id' => 'tool_ltidiagnostics_transfermode', 'data-mode' => $report['mode']]);
+        foreach ($report['limits'] as $limit) {
+            $out .= \html_writer::tag('p', $t('transfers_limit_' . $limit), ['class' => 'alert alert-warning',
+                'data-limit' => $limit]);
+        }
+        $rows = [];
+        foreach ($report['transactions'] as $tx) {
+            $head = new \html_table_cell(s($tx['correlationid']));
+            $head->header = true;
+            $head->scope = 'row';
+            $cells = [$head, s($tx['person'])];
+            foreach (\tool_ltidiagnostics\local\transfer_report::STAGES as $stage) {
+                $st = $tx['stages'][$stage];
+                $text = $t('transfers_state_' . $st['state']);
+                if ($st['local'] !== null) {
+                    $text .= ' ' . userdate($st['local']['time'], get_string('strftimetime', 'langconfig'))
+                        . ($st['local']['code'] !== '' ? ' (' . s($st['local']['code']) . ')' : '');
+                    if (!empty($st['local']['native'])) {
+                        $text .= ' ' . $t('transfers_native_' . $st['local']['native']);
+                    }
+                }
+                if ($st['partner'] !== null) {
+                    $text .= ' / ' . $t('transfers_partnerseen');
+                }
+                $cell = new \html_table_cell($text);
+                $cell->attributes['data-stage'] = $stage;
+                $cell->attributes['data-state'] = $st['state'];
+                $cells[] = $cell;
+            }
+            $cells[] = \html_writer::span($t('transfers_verdict_' . $tx['verdict']), 'badge ' . self::badge_class(
+                $tx['verdict'] === 'complete' ? 'green' : ($tx['verdict'] === 'failed' ? 'red' : 'amber')
+            ));
+            $row = new \html_table_row($cells);
+            $row->attributes['data-correlationid'] = $tx['correlationid'];
+            $row->attributes['data-verdict'] = $tx['verdict'];
+            $rows[] = $row;
+        }
+        $table = new \html_table();
+        $table->id = 'tool_ltidiagnostics_transfers';
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->caption = $t('transfers_title');
+        $table->captionhide = true;
+        $table->head = array_merge([$t('transfers_correlation'), $t('transfers_person')], array_map(function ($stage) use ($t) {
+            return $t('transfers_stage_' . $stage);
+        }, \tool_ltidiagnostics\local\transfer_report::STAGES), [$t('transfers_verdict')]);
+        $table->data = $rows;
+        if (!$rows) {
+            return $out . \html_writer::tag('p', $t('transfers_none'), ['class' => 'alert alert-info',
+                'id' => 'tool_ltidiagnostics_notransfers']);
+        }
+        return $out . \html_writer::div(\html_writer::table($table), 'table-responsive');
+    }
+
+    /**
+     * The observability table: for each transaction and direction, how much of the request and the response this system
+     * can see, and whether anything was seen at all.
+     *
+     * @param array $rows Result of observability::build().
+     * @return string
+     */
+    public function observability_table(array $rows): string {
+        if (!$rows) {
+            return '';
+        }
+        $tr = [];
+        foreach (\tool_ltidiagnostics\local\report::observability_rows($rows) as $row) {
+            $cells = [];
+            foreach (['request', 'response'] as $part) {
+                $cell = $row[$part];
+                $text = get_string('obslevel_' . $cell['level'], 'tool_ltidiagnostics') . ' - '
+                    . ($cell['seen'] !== '' ? get_string('obs_seenat', 'tool_ltidiagnostics', $cell['seen'])
+                        : get_string('obs_notseen', 'tool_ltidiagnostics'));
+                if ($cell['needs']) {
+                    $text .= ' ' . get_string('obs_needs', 'tool_ltidiagnostics', implode(', ', array_map(function ($n) {
+                        return get_string('obsneeds_' . $n, 'tool_ltidiagnostics');
+                    }, $cell['needs'])));
+                }
+                $cells[$part] = new \html_table_cell($text);
+                $cells[$part]->attributes['data-level'] = $cell['level'];
+            }
+            $head = new \html_table_cell($row['label']);
+            $head->header = true;
+            $head->scope = 'row';
+            $tr[] = new \html_table_row([$head, get_string('obsdir_' . $row['direction'], 'tool_ltidiagnostics'),
+                $cells['request'], $cells['response']]);
+            $tr[count($tr) - 1]->attributes['data-transaction'] = $row['transaction'];
+        }
+        $table = new \html_table();
+        $table->id = 'tool_ltidiagnostics_observability';
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->caption = get_string('obs_heading', 'tool_ltidiagnostics');
+        $table->captionhide = true;
+        $table->head = [get_string('obs_transaction', 'tool_ltidiagnostics'), get_string('direction', 'tool_ltidiagnostics'),
+            get_string('obs_request', 'tool_ltidiagnostics'), get_string('obs_response', 'tool_ltidiagnostics')];
+        $table->data = $tr;
+        return \html_writer::tag('p', get_string('obs_intro', 'tool_ltidiagnostics'), ['class' => 'text-muted'])
+            . \html_writer::div(\html_writer::table($table), 'table-responsive');
     }
 
     /**
@@ -237,7 +529,58 @@ class renderer extends \plugin_renderer_base {
                 'statelabel' => get_string($available ? 'available' : 'unavailable', 'tool_ltidiagnostics'),
             ];
         }
+        $coverage = [];
+        foreach ($tl['coverage'] ?? [] as $name => $cov) {
+            $coverage[] = [
+                'label' => get_string('source_' . $name, 'tool_ltidiagnostics'),
+                'count' => $cov['count'],
+                'first' => $cov['first'] ? userdate($cov['first'], '%Y-%m-%d %H:%M:%S', 'UTC') : '-',
+                'last' => $cov['last'] ? userdate($cov['last'], '%Y-%m-%d %H:%M:%S', 'UTC') : '-',
+                'note' => get_string(
+                    $cov['incomplete'] ? 'cov_incomplete' : ($cov['count'] ? 'cov_ok' : 'cov_empty'),
+                    'tool_ltidiagnostics'
+                ),
+                'incomplete' => $cov['incomplete'],
+            ];
+        }
+        $transactions = [];
+        foreach ($tl['transactions'] ?? [] as $t) {
+            $transactions[] = [
+                // Plain values: the template escapes them.
+                'correlationid' => $t['correlationid'],
+                'component' => $t['component'],
+                'connection' => $t['connkey'] !== '' ? $t['connkey'] : get_string('fam_connunknown', 'tool_ltidiagnostics'),
+                'first' => userdate($t['first'], '%Y-%m-%d %H:%M:%S', 'UTC'),
+                'last' => userdate($t['last'], '%Y-%m-%d %H:%M:%S', 'UTC'),
+                'steps' => implode(' > ', $t['steps']),
+                'outcomecode' => $t['outcome'],
+                'outcome' => get_string('fam_outcome_' . $t['outcome'], 'tool_ltidiagnostics'),
+            ];
+        }
         return $this->render_from_template('tool_ltidiagnostics/timeline', [
+            'hastransactions' => !empty($transactions),
+            'transactions' => $transactions,
+            'txheaders' => [
+                'caption' => get_string('fam_caption', 'tool_ltidiagnostics'),
+                'correlationid' => get_string('fam_correlationid', 'tool_ltidiagnostics'),
+                'component' => get_string('fam_component', 'tool_ltidiagnostics'),
+                'connection' => get_string('fam_connection', 'tool_ltidiagnostics'),
+                'first' => get_string('cov_first', 'tool_ltidiagnostics'),
+                'last' => get_string('cov_last', 'tool_ltidiagnostics'),
+                'steps' => get_string('fam_steps', 'tool_ltidiagnostics'),
+                'outcome' => get_string('fam_outcome', 'tool_ltidiagnostics'),
+            ],
+            'txintro' => get_string('fam_intro', 'tool_ltidiagnostics'),
+            'covheaders' => [
+                'caption' => get_string('cov_caption', 'tool_ltidiagnostics'),
+                'source' => get_string('source', 'tool_ltidiagnostics'),
+                'count' => get_string('cov_count', 'tool_ltidiagnostics'),
+                'first' => get_string('cov_first', 'tool_ltidiagnostics'),
+                'last' => get_string('cov_last', 'tool_ltidiagnostics'), 'note' => get_string('cov_note', 'tool_ltidiagnostics'),
+            ],
+            'coverage' => $coverage,
+            'hascoverage' => !empty($coverage),
+            'covintro' => get_string('cov_intro', 'tool_ltidiagnostics'),
             'caption' => get_string('timeline', 'tool_ltidiagnostics'),
             'headers' => [
                 'time' => get_string('timeutc', 'tool_ltidiagnostics'), 'stage' => get_string('stage', 'tool_ltidiagnostics'),
@@ -261,6 +604,18 @@ class renderer extends \plugin_renderer_base {
     public function evidence_tab(connection $c, array $filters, int $now): string {
         $out = '';
         $context = \context_system::instance();
+
+        // How much of each transaction can be seen at all (separate from what was seen).
+        $facts = (new \tool_ltidiagnostics\local\fact_collector())->collect($c, $now, $filters);
+        global $DB;
+        $imports = (int) $DB->count_records('tool_ltidiagnostics_imp', ['status' => 'done']);
+        $out .= $this->heading(get_string('obs_heading', 'tool_ltidiagnostics'), 3);
+        $out .= $this->observability_table(\tool_ltidiagnostics\local\observability::build(
+            $c,
+            $facts,
+            \tool_ltidiagnostics\local\snapshot::latest_probes($c->key),
+            \tool_ltidiagnostics\local\observability::enabled_sources($imports)
+        ));
 
         // Observer rows. No user column: the evidence needs the event, not the person.
         $out .= $this->heading(get_string('ev_observer', 'tool_ltidiagnostics'), 3);
@@ -298,6 +653,37 @@ class renderer extends \plugin_renderer_base {
                 'norows',
                 'tool_ltidiagnostics'
             ));
+        }
+
+        // Transfer events of LTI family plugins (for example completion sync), with their correlation id.
+        $out .= $this->heading(get_string('ev_family', 'tool_ltidiagnostics'), 3);
+        $familyrows = [];
+        foreach ($log['rows'] as $r) {
+            if (!empty($r['family']) && ($r['connkey'] === '' || $r['connkey'] === $c->key)) {
+                $familyrows[] = $r;
+            }
+        }
+        if (!$log['available']) {
+            $out .= \html_writer::tag('p', get_string('fam_nolog', 'tool_ltidiagnostics'));
+        } else if (!$familyrows) {
+            $out .= \html_writer::tag('p', get_string(
+                \tool_ltidiagnostics\local\family_events::emitter_installed() ? 'fam_none' : 'fam_noemitter',
+                'tool_ltidiagnostics'
+            ));
+        } else {
+            $table = new \html_table();
+            $table->attributes['class'] = 'generaltable table-sm';
+            $table->id = 'tool_ltidiagnostics_familyevents';
+            $table->caption = get_string('ev_family', 'tool_ltidiagnostics');
+            $table->head = [get_string('timeutc', 'tool_ltidiagnostics'), get_string('fam_step', 'tool_ltidiagnostics'),
+                get_string('fam_component', 'tool_ltidiagnostics'), get_string('fam_correlationid', 'tool_ltidiagnostics'),
+                get_string('fam_connection', 'tool_ltidiagnostics'), get_string('fam_code', 'tool_ltidiagnostics')];
+            foreach ($familyrows as $r) {
+                $table->data[] = [userdate($r['time'], '%Y-%m-%d %H:%M:%S', 'UTC'), s($r['step']), s($r['component']),
+                    s($r['correlationid']), $r['connkey'] !== '' ? s($r['connkey']) :
+                    get_string('fam_connunknown', 'tool_ltidiagnostics'), s($r['code'])];
+            }
+            $out .= \html_writer::table($table);
         }
 
         // Tasks.
@@ -342,7 +728,6 @@ class renderer extends \plugin_renderer_base {
 
         // Imported logs.
         $out .= $this->heading(get_string('ev_imports', 'tool_ltidiagnostics'), 3);
-        global $DB;
         $imports = $DB->get_records('tool_ltidiagnostics_imp', null, 'timecreated DESC, id DESC', '*', 0, 10);
         if (!$imports) {
             $out .= \html_writer::tag('p', get_string('noimports', 'tool_ltidiagnostics'));
@@ -357,9 +742,10 @@ class renderer extends \plugin_renderer_base {
      * Table of import jobs.
      *
      * @param \stdClass[] $imports Import records.
+     * @param bool $candelete True to add a delete link to every row (import page only).
      * @return string
      */
-    public function imports_table(array $imports): string {
+    public function imports_table(array $imports, bool $candelete = false): string {
         $table = new \html_table();
         $table->attributes['class'] = 'generaltable table-sm';
         $table->caption = get_string('ev_imports', 'tool_ltidiagnostics');
@@ -367,15 +753,26 @@ class renderer extends \plugin_renderer_base {
             get_string('source', 'tool_ltidiagnostics'),
             get_string('logtimezone', 'tool_ltidiagnostics'), get_string('range', 'tool_ltidiagnostics'),
             get_string('lines', 'tool_ltidiagnostics'), get_string('state', 'tool_ltidiagnostics')];
+        if ($candelete) {
+            $table->head[] = get_string('action', 'tool_ltidiagnostics');
+        }
         foreach ($imports as $i) {
             $range = $i->rangefrom ? userdate($i->rangefrom, '%Y-%m-%d %H:%M', 'UTC') . ' - ' . userdate(
                 $i->rangeto,
                 '%Y-%m-%d %H:%M',
                 'UTC'
             ) . ' UTC' : '-';
-            $table->data[] = [userdate($i->timecreated), s($i->kind . ':' . $i->format), s($i->sourcename), s($i->timezone),
+            $row = [userdate($i->timecreated), s($i->kind . ':' . $i->format), s($i->sourcename), s($i->timezone),
                 $range, get_string('linessummary', 'tool_ltidiagnostics', $i), s($i->status . ($i->errormessage !== '' ?
                     ' (' . $i->errormessage . ')' : ''))];
+            if ($candelete) {
+                $row[] = \html_writer::link(
+                    new \moodle_url('/admin/tool/ltidiagnostics/logimport.php', ['delete' => $i->id, 'sesskey' => sesskey()]),
+                    get_string('deleteimport', 'tool_ltidiagnostics'),
+                    ['aria-label' => get_string('deleteimport_aria', 'tool_ltidiagnostics', $i->id)]
+                );
+            }
+            $table->data[] = $row;
         }
         return \html_writer::table($table);
     }

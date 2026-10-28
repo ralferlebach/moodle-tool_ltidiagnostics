@@ -71,6 +71,13 @@ $capabilities = [
         'riskbitmask' => RISK_CONFIG,
         'archetypes' => [],
     ],
+    // Active checks inside private networks (only effective while the administrator allowed private targets).
+    'tool/ltidiagnostics:runprivatechecks' => [
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_CONFIG,
+        'archetypes' => [],
+    ],
     // Import of web server logs.
     'tool/ltidiagnostics:importlogs' => [
         'captype' => 'write',

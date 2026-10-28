@@ -31,6 +31,8 @@ use tool_ltidiagnostics\local\status_engine;
  * @covers     \tool_ltidiagnostics\local\finding
  */
 final class lang_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /**
      * Load a language file of the plugin.
      *
@@ -128,6 +130,13 @@ final class lang_test extends \advanced_testcase {
         $source = file_get_contents(__DIR__ . '/../classes/local/health_check.php');
         preg_match_all("/'((?:cfg|net|fw|tls|oidc|oauth|bs|jwks|skew|adv|core|bg|obs|priv)_[a-z0-9_]+)'/", $source, $m);
         $codes = array_unique($m[1]);
+        // Findings of the partner comparison (0.3.0) and of the tool_ltigroupautoenrol adapter (GA-03).
+        foreach (['partner_package.php', 'groupenrol_source.php'] as $file) {
+            $source = file_get_contents(__DIR__ . '/../classes/local/' . $file);
+            preg_match_all("/new finding\(\s*'([a-z0-9_]+)'/", $source, $m);
+            preg_match_all("/'((?:partner|ga)_[a-z0-9_]+)'/", $source, $m2);
+            $codes = array_merge($codes, $m[1], $m2[1]);
+        }
         // Probe failures are built from the classifier codes.
         $probecodes = ['dns_failure', 'connection_refused', 'timeout', 'proxy_407', 'proxy_error', 'transfer_error',
             'blocked_by_policy', 'cert_expired', 'cert_hostname', 'cert_chain_incomplete', 'cert_untrusted', 'cert_invalid',
@@ -164,10 +173,12 @@ final class lang_test extends \advanced_testcase {
         $strings = $f->strings();
         $this->assertStringContainsString('AGS', $strings['title'] . $strings['detail']);
         $this->assertStringNotContainsString('{$a', json_encode($strings));
-        $this->assertSame(['title', 'detail', 'fix', 'verify'], array_keys($strings));
+        $this->assertSame(['title', 'detail', 'fix', 'verify', 'where', 'uncertain', 'alt'], array_keys($strings));
         foreach (finding::layers() as $layer) {
             $g = new finding('cfg_ok', $layer, 'ok', 'admin');
             $this->assertNotSame('', $g->strings()['verify']);
+            $this->assertNotSame('', $g->strings()['where'], "where_$layer");
+            $this->assertNotSame('', $g->strings()['uncertain'], "uncertain_$layer");
         }
     }
 
@@ -224,7 +235,38 @@ final class lang_test extends \advanced_testcase {
             'stage_' => local\timeline::STAGES,
             'source_' => ['observer', 'accesslog', 'logstore', 'tasklog'],
             'role_' => ['platform', 'tool'],
-            'tab_' => ['matrix', 'health', 'timeline', 'evidence', 'history'],
+            'tab_' => ['matrix', 'health', 'messages', 'timeline', 'evidence', 'history'],
+            'system_' => [finding::SYS_LOCAL, finding::SYS_PARTNER, finding::SYS_NETWORK, finding::SYS_BOTH],
+            'certainty_' => [finding::CERTAIN, finding::LIKELY, finding::POSSIBLE],
+            'msg_' => ['oidc_login_init', 'oidc_auth_request', 'id_token_launch', 'local_effects', 'group_assignment',
+                'jwks_served', 'jwks_fetch', 'oauth_token', 'ags_lineitems', 'ags_score', 'ags_results', 'nrps',
+                'deeplinking_request', 'deeplinking_response', 'completion_roundtrip', 'custom_claims', 'service_permissions',
+                'key_rotation'],
+            'msgdir_' => ['in', 'out', 'local'],
+            'msgconf_' => ['yes', 'no', 'na'],
+            'msgbooked_' => [local\message_matrix::B_YES, local\message_matrix::B_NO, local\message_matrix::B_REMOTE,
+                local\message_matrix::B_NA],
+            'msgstate_' => local\message_matrix::STATES,
+            'msglimit_' => ['no_hook', 'browser_channel', 'transport_only', 'own_probe_only', 'not_observable_remote',
+                'task_not_acceptance', 'paging_internal', 'partner_trace', 'declared_not_granted', 'partner_package',
+                'fallback_signals', 'plugin_absent'],
+            'chain_' => ['launch', 'grades', 'roster', 'completion'],
+            'verdict_' => local\message_matrix::VERDICTS,
+            'chainreason_' => ['leg_failed', 'booked_remote', 'transport_only', 'not_observable_here', 'not_proven',
+                'not_configured'],
+            'fieldcat_' => array_merge(array_values(array_unique(local\field_matrix::FIELDS)), ['custom', 'unknown']),
+            'fieldstate_' => ['always', 'yes', 'no', 'per_activity', 'unknown', 'validated', 'present', 'absent',
+                'not_observable'],
+            'fieldagree_' => ['match', 'mismatch', 'na'],
+            'transfers_stage_' => local\transfer_report::STAGES,
+            'transfers_state_' => ['seen', 'missing', 'not_observable', 'failed'],
+            'transfers_verdict_' => ['complete', 'failed', 'limited_no_partner_mode', 'limited_one_side', 'open'],
+            'transfers_side_' => ['sender', 'receiver'],
+            'transfers_mode_' => ['one_sided', 'two_sided'],
+            'transfers_limit_' => ['partner_side_not_observable', 'logstore_truncated', 'logstore_unavailable'],
+            'transfers_export_' => ['md', 'json', 'trace'],
+            'setting_' => ['retentionaccdays', 'retentionauditdays', 'retentionsnapdays', 'retentionpartnerdays',
+                'retentionaccdays_desc', 'retentionauditdays_desc', 'retentionsnapdays_desc', 'retentionpartnerdays_desc'],
             'export_' => local\report_exporter::FORMATS,
             'cron_' => ['never', 'stale', 'ok'],
             'logstore_' => ['noreader', 'notlogging', 'readererror'],
@@ -237,6 +279,15 @@ final class lang_test extends \advanced_testcase {
                 'other'],
             'profileerror_' => ['notjson', 'schema', 'noname', 'badfeature', 'badscope', 'badexpect', 'scopesnoags', 'badkey'],
             'progress_' => ['inventory', 'matrix', 'probes', 'evidence', 'profile', 'background'],
+            'where_' => finding::layers(),
+            'uncertain_' => finding::layers(),
+            'obslevel_' => local\observability::levels(),
+            'obsdir_' => [local\observability::OUTBOUND, local\observability::INBOUND],
+            'obsneeds_' => array_values(array_filter(local\observability::switches())),
+            'obs_tx_' => array_keys(local\observability::specification('platform') + local\observability::specification('tool')),
+            'blockreason_' => ['empty', 'toolong', 'malformed', 'scheme', 'credentials', 'host', 'blocked', 'resolved_private',
+                'pin_mismatch', 'redirect_limit'],
+            'sync_' => ['grades', 'members'],
         ];
         $missing = [];
         foreach ($families as $prefix => $values) {

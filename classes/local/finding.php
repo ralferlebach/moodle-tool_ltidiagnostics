@@ -20,8 +20,10 @@ namespace tool_ltidiagnostics\local;
  * One finding of the health check: a cause with its location, the required intervention, the risk
  * and the way to verify the fix.
  *
- * Language strings are derived from the code: f_<code>_title, f_<code>_detail, f_<code>_fix.
- * The verification step is shared per layer (verify_<layer>).
+ * Language strings are derived from the code: f_<code>_title, f_<code>_detail, f_<code>_fix and, where a
+ * different cause is plausible, f_<code>_alt. Shared per layer: verify_<layer> (low risk way to confirm the fix),
+ * where_<layer> (where in Moodle or at the partner the setting lives) and uncertain_<layer> (what cannot be seen
+ * from here).
  *
  * @package    tool_ltidiagnostics
  * @copyright  2026 Ralf Erlebach
@@ -97,6 +99,28 @@ class finding {
     public $testid;
     /** @var string Confidence: direct, strong, tentative or empty. */
     public $confidence;
+    /** @var bool True when the finding is probably only a consequence of an earlier, more fundamental one. */
+    public $consequence = false;
+    /** @var string System that has to act: this_site, partner_site, network or both_sites. */
+    public $system;
+    /** @var string How sure the cause is: certain (read from data of this system), likely (observed symptom, the
+     *      named cause is the most probable one), possible (only an indication). */
+    public $certainty;
+
+    /** @var string System: this Moodle site. */
+    public const SYS_LOCAL = 'this_site';
+    /** @var string System: the LTI partner. */
+    public const SYS_PARTNER = 'partner_site';
+    /** @var string System: network, DNS, proxy, firewall or certificates between the two. */
+    public const SYS_NETWORK = 'network';
+    /** @var string System: either side may hold the wrong value (a mismatch). */
+    public const SYS_BOTH = 'both_sites';
+    /** @var string Certainty: read directly from data of this system. */
+    public const CERTAIN = 'certain';
+    /** @var string Certainty: the symptom was observed, the cause is the most probable one. */
+    public const LIKELY = 'likely';
+    /** @var string Certainty: only an indication. */
+    public const POSSIBLE = 'possible';
 
     /**
      * Constructor.
@@ -119,7 +143,73 @@ class finding {
         $this->feature = $options['feature'] ?? '';
         $this->checkedat = (int) ($options['checkedat'] ?? 0);
         $this->confidence = $options['confidence'] ?? '';
+        $this->system = $options['system'] ?? self::default_system($responsible);
+        $this->certainty = $options['certainty'] ?? self::default_certainty($severity, $this->evidencekind);
         $this->testid = $layer . '.' . $code . ($this->feature !== '' ? '.' . $this->feature : '');
+    }
+
+    /**
+     * The system that has to act, derived from the responsible team when the producer did not say.
+     *
+     * @param string $responsible Responsible team.
+     * @return string
+     */
+    public static function default_system(string $responsible): string {
+        if ($responsible === self::PARTNER) {
+            return self::SYS_PARTNER;
+        }
+        return $responsible === self::NETWORK ? self::SYS_NETWORK : self::SYS_LOCAL;
+    }
+
+    /**
+     * Default certainty: configuration and database facts of this system are certain; a failed probe or an observed
+     * transaction proves the symptom, its cause stays "likely"; everything else is "possible".
+     *
+     * @param string $severity Severity.
+     * @param string $kind Evidence kind.
+     * @return string
+     */
+    public static function default_certainty(string $severity, string $kind): string {
+        if (in_array($kind, [status::KIND_CONFIG, status::KIND_DBRECORD, status::KIND_TASKLOG], true)) {
+            return self::CERTAIN;
+        }
+        if (
+            in_array($kind, [status::KIND_PROBE, status::KIND_OBSERVED, status::KIND_LOCALEFFECT, status::KIND_ACCESSLOG,
+                status::KIND_TEST], true)
+        ) {
+            return self::LIKELY;
+        }
+        return $severity === self::OK ? self::LIKELY : self::POSSIBLE;
+    }
+
+    /**
+     * The four parts every diagnosis must name (audit item DIA-03): cause, uncertainty, responsible system and a
+     * concrete safe check, plus the fix and where the setting lives.
+     *
+     * @return array code, layer, severity, cause, detail, certainty, uncertainty, alternative, system, team, check, fix,
+     *         where, evidence
+     */
+    public function diagnosis(): array {
+        $str = $this->strings();
+        $checkid = 'f_' . $this->code . '_check';
+        $check = get_string_manager()->string_exists($checkid, 'tool_ltidiagnostics')
+            ? get_string($checkid, 'tool_ltidiagnostics', $this->a) : $str['verify'];
+        return [
+            'code' => $this->code,
+            'layer' => $this->layer,
+            'severity' => $this->severity,
+            'cause' => $str['title'],
+            'detail' => $str['detail'],
+            'certainty' => $this->certainty,
+            'uncertainty' => $str['uncertain'],
+            'alternative' => $str['alt'],
+            'system' => $this->system,
+            'team' => $this->responsible,
+            'check' => $check,
+            'fix' => $str['fix'],
+            'where' => $str['where'],
+            'evidence' => $this->evidencekind . ($this->evidence !== '' ? ':' . $this->evidence : ''),
+        ];
     }
 
     /**
@@ -144,19 +234,31 @@ class finding {
     }
 
     /**
+     * Layers in the order in which a transaction depends on them: a failure in an earlier layer makes the results of
+     * the later layers unreliable. Background processing is independent of this chain.
+     *
+     * @return string[]
+     */
+    public static function dependency_chain(): array {
+        return [self::L_CONFIG, self::L_NETWORK, self::L_FIREWALL, self::L_TLS, self::L_OIDC, self::L_OAUTH, self::L_ADVANTAGE,
+            self::L_CORE];
+    }
+
+    /**
      * Language string identifiers of this finding.
      *
-     * @return string[] title, detail, fix, verify
+     * @return string[] title, detail, fix, verify, where, uncertain (alt is optional and resolved in {@see self::strings()})
      */
     public function string_ids(): array {
         return ['title' => 'f_' . $this->code . '_title', 'detail' => 'f_' . $this->code . '_detail',
-            'fix' => 'f_' . $this->code . '_fix', 'verify' => 'verify_' . $this->layer];
+            'fix' => 'f_' . $this->code . '_fix', 'verify' => 'verify_' . $this->layer, 'where' => 'where_' . $this->layer,
+            'uncertain' => 'uncertain_' . $this->layer];
     }
 
     /**
      * Resolve the strings in the current language.
      *
-     * @return array title, detail, fix, verify
+     * @return array title, detail, fix, verify, where, uncertain, alt (empty when no alternative cause is documented)
      */
     public function strings(): array {
         $ids = $this->string_ids();
@@ -164,6 +266,9 @@ class finding {
         foreach ($ids as $k => $id) {
             $out[$k] = get_string($id, 'tool_ltidiagnostics', $this->a);
         }
+        $altid = 'f_' . $this->code . '_alt';
+        $out['alt'] = get_string_manager()->string_exists($altid, 'tool_ltidiagnostics')
+            ? get_string($altid, 'tool_ltidiagnostics', $this->a) : '';
         return $out;
     }
 }

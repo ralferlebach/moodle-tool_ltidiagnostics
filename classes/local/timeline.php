@@ -81,6 +81,8 @@ class timeline {
                 return 'service';
             case 'grade':
                 return $o->direction === 'in' ? 'service' : 'followup';
+            case observation_store::FAMILY_EVENT:
+                return family_events::classify((string) $o->eventname)['stage'];
         }
         return 'followup';
     }
@@ -96,20 +98,30 @@ class timeline {
      */
     public function build(connection $c, \context $context, array $filters, int $now): array {
         $items = [];
+        $family = [];
         foreach (observation_store::get_for_connection($c, $filters + ['limit' => 500]) as $o) {
+            $correlationid = (string) ($o->correlationid ?? '');
             $items[] = [
                 'source' => 'observer',
                 'time' => (int) $o->timecreated,
                 'stage' => self::stage_of_observation($o),
                 'label' => $o->eventname,
                 'traceid' => (string) $o->traceid,
+                'correlationid' => $correlationid,
                 'refs' => ['issuerhash' => (string) $o->issuerhash, 'courseid' => (int) $o->courseid, 'userid' => (int) $o->userid],
                 'direction' => $o->direction,
             ];
+            if ($o->eventtype === observation_store::FAMILY_EVENT && $correlationid !== '') {
+                $family[] = ['time' => (int) $o->timecreated, 'step' => family_events::classify($o->eventname)['step'],
+                    'correlationid' => $correlationid, 'component' => (string) $o->component, 'connkey' => (string) $o->connkey,
+                    'source' => 'observer'];
+            }
         }
         $from = !empty($filters['from']) ? (int) $filters['from'] : $now - 7 * DAYSECS;
         $to = !empty($filters['to']) ? (int) $filters['to'] : 0;
-        foreach (importer::get_rows($from, $to, [], 500) as $r) {
+        // Newest first (keyset page): with a large import the most recent lines matter; a full page marks the source
+        // as incomplete in the coverage.
+        foreach (importer::page($from, $to, [], 500)['rows'] as $r) {
             $items[] = [
                 'source' => 'accesslog',
                 'time' => (int) $r->logtime,
@@ -125,7 +137,32 @@ class timeline {
         $log = (new logstore_source())->fetch($context, $filters + ['limit' => 200]);
         $sources['logstore'] = $log['available'];
         $sources['logstorereason'] = $log['reason'];
+        $sources['logstorereaders'] = $log['readers'];
+        $sources['logstoreduplicates'] = $log['duplicates'];
         foreach ($log['rows'] as $r) {
+            if (!empty($r['family'])) {
+                // A family event that belongs to another connection is not shown here; one without a resolvable
+                // connection is shown and marked as such.
+                if ($r['connkey'] !== '' && $r['connkey'] !== $c->key) {
+                    continue;
+                }
+                $item = [
+                    'source' => 'logstore',
+                    'time' => $r['time'],
+                    'stage' => $r['stage'],
+                    'label' => $r['eventname'] . ($r['code'] !== '' ? ' [' . $r['code'] . ']' : ''),
+                    'traceid' => '',
+                    'correlationid' => $r['correlationid'],
+                    'refs' => ['courseid' => $r['courseid'], 'userid' => $r['userid']],
+                    'direction' => $r['direction'],
+                    'family' => true,
+                    'connkey' => $r['connkey'],
+                ];
+                $items[] = $item;
+                $family[] = ['time' => $r['time'], 'step' => $r['step'], 'correlationid' => $r['correlationid'],
+                    'component' => $r['component'], 'connkey' => $r['connkey'], 'source' => 'logstore'];
+                continue;
+            }
             $items[] = [
                 'source' => 'logstore',
                 'time' => $r['time'],
@@ -150,7 +187,48 @@ class timeline {
         usort($items, function ($x, $y) {
             return [$x['time'], self::stage_index($x['stage'])] <=> [$y['time'], self::stage_index($y['stage'])];
         });
-        return ['items' => $items, 'edges' => self::edges($items), 'sources' => $sources, 'stages' => self::STAGES];
+        $taskcoverage = (new task_source())->coverage();
+        $coverage = self::coverage($items, [
+            // The log store runs two queries of 200 rows each; whether one was cut is reported by the source itself.
+            'observer' => 500, 'accesslog' => 500, 'logstore' => PHP_INT_MAX, 'tasklog' => 100,
+        ], ['logstore' => !empty($log['truncated']) || !empty($log['familytruncated']),
+            'tasklog' => $taskcoverage['saturated']]);
+        return ['items' => $items, 'edges' => self::edges($items), 'sources' => $sources, 'stages' => self::STAGES,
+            'coverage' => $coverage, 'window' => ['from' => $from, 'to' => $to],
+            'transactions' => family_events::transactions($family)];
+    }
+
+    /**
+     * What each source covers inside the requested window, and where the picture is known to be incomplete.
+     *
+     * A source is "incomplete" when it returned as many rows as the page limit allows (older rows may be missing) or
+     * when the source itself is known to have dropped older data (task log retention). A source without rows in the
+     * window says nothing about what happened there.
+     *
+     * @param array $items Timeline items.
+     * @param int[] $limits Source => row limit of the query.
+     * @param bool[] $known Source => true when the source is known to be incomplete.
+     * @return array[] Source => count, first, last, incomplete (bool)
+     */
+    public static function coverage(array $items, array $limits, array $known = []): array {
+        $out = [];
+        foreach ($limits as $source => $limit) {
+            $times = [];
+            foreach ($items as $item) {
+                if ($item['source'] === $source) {
+                    $times[] = $item['time'];
+                }
+            }
+            $count = count($times);
+            $first = $count ? min($times) : 0;
+            $out[$source] = [
+                'count' => $count,
+                'first' => $first,
+                'last' => $count ? max($times) : 0,
+                'incomplete' => $count >= $limit || !empty($known[$source]),
+            ];
+        }
+        return $out;
     }
 
     /**
@@ -187,6 +265,7 @@ class timeline {
                 if (
                     abs($items[$j]['time'] - $items[$i]['time']) > $window && ($items[$i]['traceid'] === ''
                         || $items[$i]['traceid'] !== $items[$j]['traceid'])
+                        && !correlation::same_correlation($items[$i], $items[$j])
                 ) {
                     continue;
                 }

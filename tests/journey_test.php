@@ -45,6 +45,8 @@ require_once(__DIR__ . '/fixtures/lti_data.php');
  * @covers     \tool_ltidiagnostics\local\report
  */
 final class journey_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     use lti_data;
 
     /** @var mixed Saved script name. */
@@ -57,6 +59,7 @@ final class journey_test extends \advanced_testcase {
         parent::setUp();
         $this->script = $_SERVER['SCRIPT_NAME'] ?? null;
         observation_store::reset_trace();
+        $this->start_deprecation_guard();
     }
 
     /**
@@ -70,6 +73,7 @@ final class journey_test extends \advanced_testcase {
         }
         observation_store::reset_trace();
         parent::tearDown();
+        $this->check_deprecation_guard();
     }
 
     /**
@@ -209,7 +213,7 @@ final class journey_test extends \advanced_testcase {
         $json = json_decode(report_exporter::export($report, 'json'), true);
         $this->assertSame('excluded', $json['meta']['payloads']);
         $this->assertFalse($json['meta']['identifiersrevealed']);
-        $this->assertCount(5, $json['limits']);
+        $this->assertCount(6, $json['limits']);
         $this->assertCount(8, $json['matrix']);
         $revealed = (new report())->build($connection, $result, ['reveal' => true]);
         $this->assertStringContainsString(

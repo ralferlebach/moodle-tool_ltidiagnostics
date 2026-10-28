@@ -27,6 +27,8 @@ namespace tool_ltidiagnostics\local\accesslog;
  * @covers     \tool_ltidiagnostics\local\accesslog\path_allowlist
  */
 final class importer_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /**
      * Build access log text.
      *
@@ -244,5 +246,116 @@ final class importer_test extends \advanced_testcase {
         $files = path_allowlist::list_files([$base, 'relative']);
         $names = array_map('basename', $files);
         $this->assertEqualsCanonicalizing(['access.log', 'access.log.1.gz'], $names);
+    }
+
+    /**
+     * Gate 2 finding F3: every category constant fits the column, in install.xml and in the installed database.
+     */
+    public function test_every_category_fits_the_column(): void {
+        global $CFG, $DB;
+        $xml = simplexml_load_file($CFG->dirroot . '/admin/tool/ltidiagnostics/db/install.xml');
+        $length = 0;
+        foreach ($xml->TABLES->TABLE as $table) {
+            if ((string) $table['NAME'] !== 'tool_ltidiagnostics_acc') {
+                continue;
+            }
+            foreach ($table->FIELDS->FIELD as $field) {
+                if ((string) $field['NAME'] === 'category') {
+                    $length = (int) $field['LENGTH'];
+                }
+            }
+        }
+        $this->assertSame(parser::CATEGORY_MAXLEN, $length, 'parser::CATEGORY_MAXLEN mirrors install.xml');
+        $this->assertSame($length, (int) $DB->get_columns('tool_ltidiagnostics_acc', false)['category']->max_length);
+        foreach (parser::CATEGORIES as $category) {
+            $this->assertLessThanOrEqual($length, \core_text::strlen($category), $category);
+        }
+        $this->assertContains('service_ags_lineitems', parser::CATEGORIES);
+    }
+
+    /**
+     * Import a stream of lines.
+     *
+     * @param string[] $lines Lines.
+     * @return \stdClass Job.
+     */
+    private function import_lines(array $lines): \stdClass {
+        $fh = fopen('php://memory', 'w+');
+        fwrite($fh, implode("\n", $lines) . "\n");
+        rewind($fh);
+        $job = (new importer())->import_stream($fh, ['format' => 'combined', 'sourcename' => 'ags.log']);
+        fclose($fh);
+        return $job;
+    }
+
+    /** @var string[] Real AGS line item requests as Moodle's service endpoint receives them (GET list, POST create). */
+    private const AGS_LINES = [
+        '198.51.100.20 - - [25/Oct/2026:09:15:02 +0200] "GET /mod/lti/services.php/2/lineitems?type_id=4 HTTP/1.1" 200 412 "-" '
+            . '"LTI tool/1.0"',
+        '198.51.100.20 - - [25/Oct/2026:09:15:03 +0200] "POST /mod/lti/services.php/2/lineitems?type_id=4 HTTP/1.1" 201 230 "-" '
+            . '"LTI tool/1.0"',
+        '198.51.100.20 - - [25/Oct/2026:09:15:04 +0200] "GET /mod/lti/services.php/2/lineitems/7/lineitem?type_id=4 HTTP/1.1" '
+            . '200 198 "-" "LTI tool/1.0"',
+    ];
+
+    /**
+     * Regression F3: an access log with AGS line item requests is imported completely (0.1.0 and the first 0.2.0 build
+     * aborted with a database write error and left the job "running").
+     */
+    public function test_ags_lineitems_lines_are_imported(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $job = $this->import_lines(self::AGS_LINES);
+        $this->assertSame('done', $job->status);
+        $this->assertSame(3, $job->linesstored);
+        $this->assertSame('done', $DB->get_field('tool_ltidiagnostics_imp', 'status', ['id' => $job->id]));
+        $categories = $DB->get_fieldset_select('tool_ltidiagnostics_acc', 'category', 'importid = ?', [$job->id]);
+        $this->assertSame(['service_ags_lineitems', 'service_ags_lineitems', 'service_ags_lineitems'], $categories);
+        $rows = importer::get_rows(0, 0, ['service_ags_lineitems']);
+        $this->assertCount(3, $rows);
+    }
+
+    /**
+     * A database error during the import ends the job as "failed", never "running". Reproduced with the old char(20)
+     * column, which is restored afterwards.
+     */
+    public function test_database_error_ends_the_job_as_failed(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $dbman = $DB->get_manager();
+        $table = new \xmldb_table('tool_ltidiagnostics_acc');
+        // The index of 0.3.0 on the column must be dropped to change the precision, and is restored afterwards.
+        $index = new \xmldb_index('category_time', XMLDB_INDEX_NOTUNIQUE, ['category', 'logtime']);
+        $dbman->drop_index($table, $index);
+        $dbman->change_field_precision(
+            $table,
+            new \xmldb_field('category', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, null, 'requestid')
+        );
+        try {
+            $job = $this->import_lines(self::AGS_LINES);
+        } finally {
+            $dbman->change_field_precision(
+                $table,
+                new \xmldb_field('category', XMLDB_TYPE_CHAR, '40', null, XMLDB_NOTNULL, null, null, 'requestid')
+            );
+            $dbman->add_index($table, $index);
+        }
+        $this->assertSame('failed', $job->status);
+        $this->assertSame('dberror', $job->errormessage);
+        $stored = $DB->get_record('tool_ltidiagnostics_imp', ['id' => $job->id], '*', MUST_EXIST);
+        $this->assertSame('failed', $stored->status, 'The job is not left running.');
+        $this->assertSame(0, $DB->count_records('tool_ltidiagnostics_imp', ['status' => 'running']));
+        $this->assertStringNotContainsString('lineitems', $stored->errormessage, 'No log content in the error message.');
+    }
+
+    /**
+     * A category that does not fit the column is stored as "other" instead of breaking the import.
+     */
+    public function test_overlong_category_is_guarded(): void {
+        foreach (parser::CATEGORIES as $category) {
+            $this->assertSame($category, importer::storable_category($category));
+        }
+        $this->assertSame('other', importer::storable_category(str_repeat('x', parser::CATEGORY_MAXLEN + 1)));
+        $this->assertSame('other', importer::storable_category('service_ags_unknown'));
     }
 }

@@ -206,6 +206,15 @@ class parser {
         return $best;
     }
 
+    /** @var int Length of the column tool_ltidiagnostics_acc.category (install.xml). Every category must fit. */
+    public const CATEGORY_MAXLEN = 40;
+
+    /** @var string[] Every category that categorise() or the importer can produce. */
+    public const CATEGORIES = [
+        'service_nrps', 'service_ags_scores', 'service_ags_results', 'service_ags_lineitems', 'service', 'oauth', 'oidc',
+        'jwks', 'dynreg', 'deeplinking', 'launch', 'completion_sync', 'other',
+    ];
+
     /**
      * Classify a path into an LTI flow category.
      *
@@ -242,6 +251,7 @@ class parser {
             '/mod/lti/contentitem' => 'deeplinking',
             '/enrol/lti/launch_deeplink.php' => 'deeplinking',
             '/enrol/lti/launch.php' => 'launch',
+            '/local/lticompletionsync/endpoint.php' => 'completion_sync',
             '/mod/lti/launch.php' => 'launch',
             '/mod/lti/return.php' => 'launch',
         ];

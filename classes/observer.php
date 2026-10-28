@@ -18,6 +18,7 @@ namespace tool_ltidiagnostics;
 
 use tool_ltidiagnostics\local\config;
 use tool_ltidiagnostics\local\entrypoint;
+use tool_ltidiagnostics\local\family_events;
 use tool_ltidiagnostics\local\observation_store;
 use tool_ltidiagnostics\local\resolver;
 
@@ -75,6 +76,9 @@ class observer {
             'timecreated' => (int) $event->timecreated,
             'fieldnames' => self::field_names($event),
         ];
+        if (family_events::is_family_component((string) $event->component)) {
+            return self::family($event, $base);
+        }
         switch ($event->eventname) {
             case '\core\event\user_loggedin':
             case '\core\event\user_created':
@@ -82,19 +86,19 @@ class observer {
                 if ($DB->get_field('user', 'auth', ['id' => $userid]) !== 'lti') {
                     return null;
                 }
-                return self::with_issuer($base + ['userid' => $userid], $userid) + [
+                return self::with_claims(self::with_issuer($base + ['userid' => $userid], $userid) + [
                     'eventtype' => $event->eventname === '\core\event\user_loggedin' ? 'launch' : 'account_created',
                     'direction' => 'in',
-                ];
+                ], $userid, $entry);
             case '\core\event\user_updated':
                 $userid = (int) $event->objectid;
                 if ($entry !== entrypoint::LTI_LAUNCH || $DB->get_field('user', 'auth', ['id' => $userid]) !== 'lti') {
                     return null;
                 }
-                return self::with_issuer($base + ['userid' => $userid], $userid) + [
+                return self::with_claims(self::with_issuer($base + ['userid' => $userid], $userid) + [
                     'eventtype' => 'launch_sync',
                     'direction' => 'in',
-                ];
+                ], $userid, $entry);
             case '\core\event\user_enrolment_created':
                 if (($event->other['enrol'] ?? '') !== 'lti') {
                     return null;
@@ -137,6 +141,17 @@ class observer {
                     'connkey' => resolver::platform_key_for_lti_instance((int) $event->objectid),
                     'issuerhash' => '',
                 ];
+            case '\tool_ltigroupautoenrol\event\group_assignment_completed':
+            case '\tool_ltigroupautoenrol\event\group_assignment_failed':
+                // Optional plugin (GA-03): the enrol instance of the LTI tool is the object; nothing from "other" is kept.
+                $enrolid = (int) $event->objectid;
+                return $base + [
+                    'eventtype' => substr($event->eventname, -6) === 'failed' ? 'groupassign_failed' : 'groupassign',
+                    'direction' => 'local',
+                    'userid' => (int) $event->relateduserid,
+                    'connkey' => $enrolid ? resolver::tool_key_for_enrol_instance($enrolid) : '',
+                    'issuerhash' => '',
+                ];
             case '\mod_lti\event\unknown_service_api_called':
                 return $base + [
                     'eventtype' => 'service_unknown',
@@ -146,6 +161,29 @@ class observer {
                 ];
         }
         return null;
+    }
+
+    /**
+     * Observation of an LTI family transfer event: only the correlation id and the connection are taken from "other".
+     *
+     * @param \core\event\base $event The event.
+     * @param array $base Common fields.
+     * @return array|null Null for a family event without a correlation id.
+     */
+    private static function family(\core\event\base $event, array $base): ?array {
+        $other = family_events::sanitise_other($event->other);
+        if ($other['correlationid'] === '') {
+            return null;
+        }
+        $class = family_events::classify((string) $event->eventname);
+        return $base + [
+            'eventtype' => observation_store::FAMILY_EVENT,
+            'direction' => $class['direction'],
+            'userid' => (int) $event->relateduserid,
+            'connkey' => family_events::connection_key((string) $event->component, $other['connectionid']),
+            'issuerhash' => '',
+            'correlationid' => $other['correlationid'],
+        ];
     }
 
     /**
@@ -160,6 +198,40 @@ class observer {
         $hash = count($hashes) === 1 ? reset($hashes) : '';
         $data['issuerhash'] = $hash;
         $data['connkey'] = $hash !== '' ? resolver::tool_key_for_issuer_hash($hash) : '';
+        return $data;
+    }
+
+    /**
+     * Presence of the optional identity claims of the last launch (DIA-02 field matrix), derived without reading or
+     * storing a value: auth_lti stores a placeholder when a claim is missing (first name = sub, last name = iss, e-mail
+     * = a generated address in the example.com domain, identical in Moodle 4.5 and 5.3). Comparing the stored user record
+     * with that placeholder tells whether the claim was sent. Only "present"/"absent" markers are added to the field
+     * names, never a value. Skipped outside the launch scripts and when the user has more than one LTI binding.
+     *
+     * @param array $data Observation data.
+     * @param int $userid User id.
+     * @param string $entry Entry point.
+     * @return array
+     */
+    private static function with_claims(array $data, int $userid, string $entry): array {
+        global $DB;
+        if ($entry !== entrypoint::LTI_LAUNCH || !$DB->get_manager()->table_exists('auth_lti_linked_login')) {
+            return $data;
+        }
+        $links = $DB->get_records('auth_lti_linked_login', ['userid' => $userid], '', 'id, issuer, sub', 0, 2);
+        $user = $DB->get_record('user', ['id' => $userid], 'id, firstname, lastname, email');
+        if (count($links) !== 1 || !$user) {
+            return $data;
+        }
+        $link = reset($links);
+        $placeholder = \core_user::clean_field('enrol_lti_13_' . sha1($link->issuer . '_' . $link->sub) . '@example.com', 'email');
+        $markers = [
+            'claim.given_name=' . ((string) $user->firstname !== (string) $link->sub ? 'present' : 'absent'),
+            'claim.family_name=' . ((string) $user->lastname !== (string) $link->issuer ? 'present' : 'absent'),
+            'claim.email=' . ((string) $user->email !== (string) $placeholder ? 'present' : 'absent'),
+        ];
+        $names = $data['fieldnames'] !== null ? (array) json_decode((string) $data['fieldnames'], true) : [];
+        $data['fieldnames'] = json_encode(array_values(array_merge($names, $markers)));
         return $data;
     }
 

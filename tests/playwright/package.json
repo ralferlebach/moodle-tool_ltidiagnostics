@@ -1,11 +1,11 @@
 {
   "name": "tool_ltidiagnostics-playwright",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Two-site end-to-end tests for tool_ltidiagnostics.",
   "scripts": {
     "test": "playwright test",
-    "check": "node --check lib.js && node --check ltidiagnostics.spec.js && node --check playwright.config.js"
+    "check": "node --check lib.js && node --check ltidiagnostics.spec.js && node --check accessibility.spec.js && node --check family.spec.js && node --check messages_two_site.spec.js && node --check partner_two_site.spec.js && node --check transfers_two_site.spec.js && node --check groups_two_site.spec.js && node --check playwright.config.js && node --check playwright.order.config.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.47.0"

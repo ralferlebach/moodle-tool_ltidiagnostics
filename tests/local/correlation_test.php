@@ -26,6 +26,8 @@ namespace tool_ltidiagnostics\local;
  * @covers     \tool_ltidiagnostics\local\correlation
  */
 final class correlation_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /**
      * The four classes.
      */

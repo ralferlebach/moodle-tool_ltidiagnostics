@@ -44,15 +44,86 @@ class fact_collector {
             'obs' => $this->summarise_observations($obs),
             'access' => $this->summarise_access($now, $filters),
             'tasklog' => $this->summarise_tasklog($filters),
+            'family' => $this->summarise_family($c, $obs, $now, $filters),
             'tokens' => [],
             'tool' => [],
+            'claims' => $this->summarise_claims($obs),
         ];
         if ($c->role === connection::ROLE_PLATFORM) {
             $facts['tokens'] = $this->platform_tokens($c);
         } else {
             $facts['tool'] = $this->tool_facts($c);
+            $facts['groupenrol'] = groupenrol_source::facts($c, $facts['obs']);
         }
         return $facts;
+    }
+
+    /**
+     * LTI family transfer events of this connection: newest time per step (sent, acknowledged, http_received, ...),
+     * from the own observations and from the log stores. A log store row whose connection cannot be resolved counts
+     * for every connection of the matching role direction; one that belongs to another connection does not count.
+     *
+     * @param connection $c The connection.
+     * @param \stdClass[] $obs Observations of the connection.
+     * @param int $now Current time.
+     * @param array $filters Filters.
+     * @return int[] Step => newest time; "any" => newest time of all.
+     */
+    private function summarise_family(connection $c, array $obs, int $now, array $filters): array {
+        $out = [];
+        $add = function (string $step, int $time) use (&$out) {
+            $out[$step] = max($out[$step] ?? 0, $time);
+            $out['any'] = max($out['any'] ?? 0, $time);
+        };
+        foreach ($obs as $o) {
+            if ($o->eventtype === observation_store::FAMILY_EVENT) {
+                $add(family_events::classify((string) $o->eventname)['step'], (int) $o->timecreated);
+            }
+        }
+        $wanted = $c->role === connection::ROLE_PLATFORM ? 'in' : 'out';
+        try {
+            $log = (new logstore_source())->fetch(
+                \context_system::instance(),
+                ['from' => !empty($filters['from']) ? (int) $filters['from'] : $now - logstore_source::DEFAULT_WINDOW,
+                    'to' => (int) ($filters['to'] ?? 0), 'limit' => 200]
+            );
+        } catch (\Throwable $e) {
+            return $out;
+        }
+        foreach ($log['rows'] as $r) {
+            if (empty($r['family']) || ($r['connkey'] !== '' && $r['connkey'] !== $c->key)) {
+                continue;
+            }
+            if ($r['connkey'] === '' && $r['direction'] !== $wanted) {
+                continue;
+            }
+            $add($r['step'], (int) $r['time']);
+        }
+        return $out;
+    }
+
+    /**
+     * Identity claim presence of the newest launch that carries the markers of the observer (DIA-02 field matrix).
+     *
+     * @param \stdClass[] $obs Observations, newest first.
+     * @return array given_name, family_name, email => 'present'|'absent'; time => observation time; empty when unknown
+     */
+    private function summarise_claims(array $obs): array {
+        foreach ($obs as $o) {
+            if (!in_array($o->eventtype, ['launch', 'launch_sync', 'account_created'], true) || empty($o->fieldnames)) {
+                continue;
+            }
+            $out = [];
+            foreach ((array) json_decode((string) $o->fieldnames, true) as $name) {
+                if (is_string($name) && preg_match('/^claim\.([a-z_]+)=(present|absent)$/', $name, $m)) {
+                    $out[$m[1]] = $m[2];
+                }
+            }
+            if ($out) {
+                return $out + ['time' => (int) $o->timecreated];
+            }
+        }
+        return [];
     }
 
     /**
@@ -63,7 +134,8 @@ class fact_collector {
      */
     private function summarise_observations(array $obs): array {
         $s = ['launch' => 0, 'enrolment' => 0, 'group' => 0, 'grade_in' => 0, 'grade_local' => 0, 'view_out' => 0,
-            'account_created' => 0, 'service_unknown' => 0, 'count' => count($obs)];
+            'account_created' => 0, 'service_unknown' => 0, 'groupassign' => 0, 'groupassign_failed' => 0,
+            'count' => count($obs)];
         foreach ($obs as $o) {
             $t = (int) $o->timecreated;
             if ($o->eventtype === 'launch' || $o->eventtype === 'launch_sync') {
@@ -91,18 +163,10 @@ class fact_collector {
      * @return array
      */
     private function summarise_access(int $now, array $filters): array {
+        // DIA-04: one aggregated query instead of reading rows; correct for any number of imported lines.
         $from = !empty($filters['from']) ? (int) $filters['from'] : $now - 30 * DAYSECS;
         $to = !empty($filters['to']) ? (int) $filters['to'] : 0;
-        $out = [];
-        foreach (importer::get_rows($from, $to, [], 1000) as $r) {
-            if ($r->kind !== 'access') {
-                continue;
-            }
-            $key = ($r->httpstatus >= 200 && $r->httpstatus < 400) ? 'ok' : 'fail';
-            $out[$r->category][$key] = ($out[$r->category][$key] ?? 0) + 1;
-            $out[$r->category]['last'] = max($out[$r->category]['last'] ?? 0, (int) $r->logtime);
-        }
-        return $out;
+        return importer::summary($from, $to);
     }
 
     /**
@@ -133,7 +197,7 @@ class fact_collector {
      */
     private function platform_tokens(connection $c): array {
         global $DB;
-        $out = ['ags' => 0, 'nrps' => 0, 'any' => 0];
+        $out = ['ags' => 0, 'nrps' => 0, 'any' => 0, 'scopes' => []];
         if (!$DB->get_manager()->table_exists('lti_access_tokens')) {
             return $out;
         }
@@ -148,6 +212,13 @@ class fact_collector {
         foreach ($rs as $t) {
             $time = (int) $t->timecreated;
             $out['any'] = max($out['any'], $time);
+            // Scope names are public identifiers of the LTI specification; token values are never selected.
+            $scopes = json_decode((string) $t->scope, true);
+            foreach (is_array($scopes) ? $scopes : preg_split('/\s+/', (string) $t->scope) as $scope) {
+                if (is_string($scope) && $scope !== '') {
+                    $out['scopes'][$scope] = max($out['scopes'][$scope] ?? 0, $time);
+                }
+            }
             if (strpos((string) $t->scope, 'lti-ags') !== false) {
                 $out['ags'] = max($out['ags'], $time);
             }

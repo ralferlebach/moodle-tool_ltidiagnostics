@@ -33,6 +33,8 @@ require_once(__DIR__ . '/../fixtures/lti_data.php');
  * @covers     \tool_ltidiagnostics\local\task_source
  */
 final class sources_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     use lti_data;
 
     /**
@@ -79,7 +81,8 @@ final class sources_test extends \advanced_testcase {
         $this->assertNotContains('\mod_page\event\course_module_viewed', $names);
         foreach ($result['rows'] as $row) {
             $this->assertSame(
-                ['source', 'time', 'eventname', 'component', 'courseid', 'contextid', 'objectid', 'userid'],
+                ['source', 'reader', 'readers', 'time', 'eventname', 'component', 'courseid', 'contextid', 'objectid', 'userid',
+                    'family', 'correlationid'],
                 array_keys($row),
                 'Rows carry ids only.'
             );

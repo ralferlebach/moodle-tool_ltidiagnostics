@@ -53,7 +53,10 @@ if ($conn === null) {
 $filters = ['courseid' => optional_param('courseid', 0, PARAM_INT), 'cmid' => optional_param('cmid', 0, PARAM_INT), 'from' => 0,
     'to' => 0];
 foreach (['from', 'to'] as $name) {
-    $time = strtotime(optional_param($name, '', PARAM_TEXT) . ' UTC');
+    // An empty value must stay "no limit": strtotime(' UTC') is the current time, which made every export before 0.3.0
+    // evaluate an empty window [now, now].
+    $text = trim(optional_param($name, '', PARAM_TEXT));
+    $time = $text !== '' ? strtotime($text . ' UTC') : false;
     $filters[$name] = $time ? (int) $time : 0;
 }
 $now = time();

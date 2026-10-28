@@ -35,6 +35,8 @@ require_once(__DIR__ . '/fixtures/lti_data.php');
  * @covers     \tool_ltidiagnostics\local\entrypoint
  */
 final class observer_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     use lti_data;
 
 
@@ -61,6 +63,7 @@ final class observer_test extends \advanced_testcase {
         parent::setUp();
         $this->script = $_SERVER['SCRIPT_NAME'] ?? null;
         observation_store::reset_trace();
+        $this->start_deprecation_guard();
     }
 
     /**
@@ -75,6 +78,7 @@ final class observer_test extends \advanced_testcase {
         unset($_SERVER['HTTP_X_REQUEST_ID']);
         observation_store::reset_trace();
         parent::tearDown();
+        $this->check_deprecation_guard();
     }
 
     /**
@@ -107,7 +111,10 @@ final class observer_test extends \advanced_testcase {
         $observers = [];
         require($CFG->dirroot . '/admin/tool/ltidiagnostics/db/events.php');
         $names = array_column($observers, 'eventname');
-        $this->assertEqualsCanonicalizing(\tool_ltidiagnostics\local\logstore_source::EVENTS, $names);
+        $this->assertEqualsCanonicalizing(array_merge(
+            \tool_ltidiagnostics\local\logstore_source::EVENTS,
+            ['\local_lticompletionsync\event\sync_event']
+        ), $names);
         foreach ($observers as $o) {
             $this->assertSame('\tool_ltidiagnostics\observer::handle', $o['callback']);
             $this->assertArrayNotHasKey('internal', $o, 'Observers must run after the transaction commits.');

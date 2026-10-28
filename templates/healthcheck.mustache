@@ -21,25 +21,52 @@
 
     Example context (json):
     {
-        "labels": {"intervention": "Required intervention", "risk": "Risk", "verification": "How to verify"},
-        "headings": {"progress": "What was checked", "layers": "Traffic light per layer", "findings": "Findings, most urgent first",
+        "labels": {"intervention": "Required intervention", "risk": "Risk", "verification": "How to verify", "where": "Where to look",
+            "alt": "Other possible cause", "uncertain": "Not visible from here", "responsible": "Responsible",
+            "consequence": "Probably a consequence of an earlier finding."},
+        "headings": {"rootcause": "Most likely cause", "observability": "What can be seen", "progress": "What was checked", "layers": "Traffic light per layer", "findings": "Findings, most urgent first",
             "nofindings": "No findings."},
+        "rootcause": {"title": "Client ID missing", "severitylabel": "Blocking", "responsible": "Administrator", "layer": "Configuration",
+         "detail": "The tool has no client id.", "fix": "Enter the client id.", "verify": "Run the check again.",
+         "where": "Connection page", "uncertain": "The partner side is not visible.", "alt": "", "testid": "configuration.cfg_clientid",
+         "systemlabel": "This site", "certaintylabel": "Certain", "check": "Run the check again."},
+        "norootcause": "",
+        "observability": "",
         "progress": [{"label": "Inventory read", "done": true, "statelabel": "done"}],
         "layers": [{"label": "Configuration", "badge": "bg-success", "lightlabel": "Green"}],
         "groups": [
             {"heading": "Blocking", "findings": [
-                {"title": "Client ID missing", "layer": "Configuration", "responsible": "Administrator", "detail": "The tool has no client id.",
+                {"severitylabel": "Blocking", "consequence": false, "where": "Connection page", "uncertain": "Not visible.", "alt": "", "title": "Client ID missing", "layer": "Configuration", "responsible": "Administrator", "detail": "The tool has no client id.",
                  "fix": "Enter the client id.", "risklabel": "Low", "verify": "Run the check again.", "evidence": "config",
-                 "testid": "configuration.cfg_clientid"}
+                 "testid": "configuration.cfg_clientid", "system": "this_site", "systemlabel": "This site", "certainty": "certain",
+                 "certaintylabel": "Certain", "check": "Run the check again.", "severity": "blocking"}
             ]}
         ]
     }
 }}
+{{#rootcause}}
+<section aria-labelledby="ltidiag-rootcause" class="card border-danger mb-4" id="tool_ltidiagnostics_rootcause" data-testid="{{testid}}">
+    <div class="card-body">
+        <h3 id="ltidiag-rootcause" class="card-title">{{headings.rootcause}}</h3>
+        <p class="h5"><span class="badge bg-secondary text-dark">{{severitylabel}}</span> {{title}}</p>
+        <p class="small text-muted mb-2">{{layer}} &middot; {{labels.responsible}}: {{responsible}} &middot; {{systemlabel}} &middot; {{certaintylabel}}</p>
+        <p>{{detail}}</p>
+        <dl class="mb-0">
+            <dt>{{labels.intervention}}</dt><dd>{{fix}}</dd>
+            <dt>{{labels.where}}</dt><dd>{{where}}</dd>
+            {{#alt}}<dt>{{labels.alt}}</dt><dd>{{alt}}</dd>{{/alt}}
+            <dt>{{labels.verification}}</dt><dd>{{check}}</dd>
+            <dt>{{labels.uncertain}}</dt><dd>{{uncertain}}</dd>
+        </dl>
+    </div>
+</section>
+{{/rootcause}}
+{{#norootcause}}<p class="alert alert-info" id="tool_ltidiagnostics_norootcause">{{norootcause}}</p>{{/norootcause}}
 <section aria-labelledby="ltidiag-progress">
     <h3 id="ltidiag-progress">{{headings.progress}}</h3>
     <ol class="list-unstyled">
         {{#progress}}
-        <li><span class="badge {{#done}}bg-success{{/done}}{{^done}}bg-secondary{{/done}}">{{statelabel}}</span> {{label}}</li>
+        <li><span class="badge {{#done}}bg-success text-white{{/done}}{{^done}}bg-secondary text-dark{{/done}}">{{statelabel}}</span> {{label}}</li>
         {{/progress}}
     </ol>
 </section>
@@ -53,19 +80,29 @@
         {{/layers}}
     </ul>
 </section>
+{{#observability}}
+<section aria-labelledby="ltidiag-observability">
+    <h3 id="ltidiag-observability">{{headings.observability}}</h3>
+    {{{observability}}}
+</section>
+{{/observability}}
 <section aria-labelledby="ltidiag-findings">
     <h3 id="ltidiag-findings">{{headings.findings}}</h3>
     {{^groups}}<p class="alert alert-info">{{headings.nofindings}}</p>{{/groups}}
     {{#groups}}
     <h4>{{heading}}</h4>
     {{#findings}}
-    <div class="card mb-3" data-testid="{{testid}}" data-severity="{{severity}}">
+    <div class="card mb-3" data-testid="{{testid}}" data-severity="{{severity}}" data-system="{{system}}" data-certainty="{{certainty}}">
         <div class="card-body">
-            <h5 class="card-title">{{title}}</h5>
-            <p class="card-subtitle mb-2 text-muted small">{{layer}} &middot; {{responsible}} &middot; {{evidence}}</p>
+            <h5 class="card-title"><span class="badge bg-secondary text-dark">{{severitylabel}}</span> {{title}}</h5>
+            <p class="card-subtitle mb-2 text-muted small">{{layer}} &middot; {{responsible}} &middot; {{systemlabel}} &middot; {{certaintylabel}} &middot; {{evidence}}</p>
+            {{#consequence}}<p class="small fst-italic font-italic">{{labels.consequence}}</p>{{/consequence}}
             <p>{{detail}}</p>
             {{#fix}}<p><strong>{{labels.intervention}}:</strong> {{fix}} <span class="small text-muted">({{labels.risk}}: {{risklabel}})</span></p>{{/fix}}
-            <p class="mb-0"><strong>{{labels.verification}}:</strong> {{verify}}</p>
+            <p class="mb-1"><strong>{{labels.where}}:</strong> {{where}}</p>
+            {{#alt}}<p class="mb-1"><strong>{{labels.alt}}:</strong> {{alt}}</p>{{/alt}}
+            <p class="mb-1"><strong>{{labels.verification}}:</strong> {{check}}</p>
+            <p class="mb-0 small text-muted"><strong>{{labels.uncertain}}:</strong> {{uncertain}}</p>
         </div>
     </div>
     {{/findings}}

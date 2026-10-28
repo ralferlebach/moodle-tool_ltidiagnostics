@@ -105,6 +105,34 @@ if (
             get_string('setting_allowprivate_desc', 'tool_ltidiagnostics'),
             0
         ));
+        $settings->add(new admin_setting_configtextarea(
+            'tool_ltidiagnostics/privatetargetallowlist',
+            get_string('setting_privatetargetallowlist', 'tool_ltidiagnostics'),
+            get_string('setting_privatetargetallowlist_desc', 'tool_ltidiagnostics'),
+            '',
+            PARAM_RAW,
+            60,
+            3
+        ));
+        $settings->add(new admin_setting_configtext(
+            'tool_ltidiagnostics/importratelimit',
+            get_string('setting_importratelimit', 'tool_ltidiagnostics'),
+            get_string('setting_importratelimit_desc', 'tool_ltidiagnostics'),
+            10,
+            PARAM_INT
+        ));
+        foreach (
+            ['retentionaccdays' => 30, 'retentionauditdays' => 365, 'retentionsnapdays' => 365,
+                'retentionpartnerdays' => 30] as $name => $default
+        ) {
+            $settings->add(new admin_setting_configtext(
+                'tool_ltidiagnostics/' . $name,
+                get_string('setting_' . $name, 'tool_ltidiagnostics'),
+                get_string('setting_' . $name . '_desc', 'tool_ltidiagnostics'),
+                $default,
+                PARAM_INT
+            ));
+        }
         $settings->add(new admin_setting_configtext(
             'tool_ltidiagnostics/diagmodemaxminutes',
             get_string('setting_diagmodemax', 'tool_ltidiagnostics'),

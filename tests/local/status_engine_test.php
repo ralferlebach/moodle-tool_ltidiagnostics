@@ -26,6 +26,8 @@ namespace tool_ltidiagnostics\local;
  * @covers     \tool_ltidiagnostics\local\status_engine
  */
 final class status_engine_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /**
      * Build a ladder from state shorthand.
      *

@@ -81,9 +81,9 @@ $covered = 0;
 $total = 0;
 foreach ($xml->xpath('//file') as $file) {
     $name = (string) $file['name'];
-    // Restricted to this plugin: the three sibling plugins are installed alongside it, but their
-    // tests do not run in this job. Counting their statements would put uncovered code in the
-    // denominator and make the figure meaningless. Test files are excluded as well - they are the
+    // Restricted to this plugin: Moodle core and any other installed plugin are in the report too,
+    // but their tests do not run in this job. Counting their statements would put uncovered code in
+    // the denominator and make the figure meaningless. Test files are excluded as well - they are the
     // instrument, not the subject.
     if (strpos($name, $needle) === false || strpos($name, '/tests/') !== false) {
         continue;

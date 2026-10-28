@@ -89,8 +89,180 @@ class importer {
         if (!in_array($job->format, parser::formats($job->kind), true)) {
             return $this->fail($o, 'badformat');
         }
+        if (!self::within_rate_limit((int) $o['userid'], (int) $job->timecreated)) {
+            // DIA-04: imports are expensive (parsing, hashing, inserts); a person may start only a bounded number per hour.
+            return $this->fail($o, 'ratelimited');
+        }
         $job->id = $DB->insert_record('tool_ltidiagnostics_imp', $job);
+        try {
+            return $this->read_into($job, $fh, $o, $zlib);
+        } catch (\Throwable $e) {
+            // A job must never stay "running": whatever went wrong (a database write, a broken stream), the job ends
+            // as failed with a short reason. Rows stored before the error stay attached to the job and can be deleted
+            // with it. The exception text is not stored: it may contain parts of the log line.
+            $job->status = 'failed';
+            $job->errormessage = $e instanceof \dml_exception ? 'dberror' : 'readerror';
+            $DB->update_record('tool_ltidiagnostics_imp', $job);
+            return $job;
+        }
+    }
 
+    /**
+     * Whether a person may start another import now (setting importratelimit per hour; 0 switches the limit off).
+     * Imports from the command line (user 0) are not limited.
+     *
+     * @param int $userid User id.
+     * @param int $now Time.
+     * @return bool
+     */
+    public static function within_rate_limit(int $userid, int $now): bool {
+        global $DB;
+        $limit = (int) \tool_ltidiagnostics\local\config::get('importratelimit');
+        if ($userid <= 0 || $limit <= 0) {
+            return true;
+        }
+        $count = $DB->count_records_select(
+            'tool_ltidiagnostics_imp',
+            'userid = :u AND timecreated > :t',
+            ['u' => $userid, 't' => $now - HOURSECS]
+        );
+        return $count < $limit;
+    }
+
+    /**
+     * Aggregated counts of imported access lines per category and status inside a window: one bounded GROUP BY query
+     * (indexes category_time and logtime), independent of the number of rows; nothing is loaded into memory.
+     *
+     * @param int $from Start (unix).
+     * @param int $to End (unix, 0 = open).
+     * @return array category => [ok, fail, last, lastok, lastfail, codes (status => count), paged]
+     */
+    public static function summary(int $from, int $to = 0): array {
+        global $DB;
+        $where = 'kind = :kind AND logtime >= :tfrom';
+        $params = ['kind' => 'access', 'tfrom' => $from];
+        if ($to > 0) {
+            $where .= ' AND logtime <= :tto';
+            $params['tto'] = $to;
+        }
+        $out = [];
+        $rs = $DB->get_recordset_sql(
+            "SELECT category, httpstatus, COUNT(1) AS n, MAX(logtime) AS last
+               FROM {tool_ltidiagnostics_acc}
+              WHERE $where
+           GROUP BY category, httpstatus",
+            $params
+        );
+        foreach ($rs as $r) {
+            $cat = (string) $r->category;
+            $code = (int) $r->httpstatus;
+            $ok = $code >= 200 && $code < 400;
+            $out[$cat] = $out[$cat] ?? ['ok' => 0, 'fail' => 0, 'last' => 0, 'lastok' => 0, 'lastfail' => 0, 'codes' => [],
+                'paged' => 0];
+            $out[$cat][$ok ? 'ok' : 'fail'] += (int) $r->n;
+            $out[$cat]['codes'][$code] = (int) $r->n;
+            $out[$cat]['last'] = max($out[$cat]['last'], (int) $r->last);
+            $out[$cat][$ok ? 'lastok' : 'lastfail'] = max($out[$cat][$ok ? 'lastok' : 'lastfail'], (int) $r->last);
+        }
+        $rs->close();
+        // Paging of membership and line item lists: the query keys survive the redaction, the values do not.
+        $likes = [];
+        foreach (['from', 'limit', 'page', 'offset', 'rlid'] as $i => $key) {
+            $likes[] = $DB->sql_like('path', ':pq' . $i) . ' OR ' . $DB->sql_like('path', ':pa' . $i);
+            $params['pq' . $i] = '%?' . $key . '=%';
+            $params['pa' . $i] = '%&' . $key . '=%';
+        }
+        [$insql, $inparams] = $DB->get_in_or_equal(
+            ['service_nrps', 'service_ags_lineitems', 'service_ags_results'],
+            SQL_PARAMS_NAMED,
+            'pc'
+        );
+        $rs = $DB->get_recordset_sql(
+            "SELECT category, COUNT(1) AS n FROM {tool_ltidiagnostics_acc}
+              WHERE $where AND category $insql AND (" . implode(' OR ', $likes) . ")
+           GROUP BY category",
+            $params + $inparams
+        );
+        foreach ($rs as $r) {
+            if (isset($out[$r->category])) {
+                $out[$r->category]['paged'] = (int) $r->n;
+            }
+        }
+        $rs->close();
+        return $out;
+    }
+
+    /**
+     * One page of imported lines, newest first, with keyset pagination (stable under concurrent imports, no OFFSET).
+     *
+     * @param int $from Start (unix).
+     * @param int $to End (unix, 0 = open).
+     * @param string[] $categories Restrict to categories (empty = all).
+     * @param int $limit Page size (1..500).
+     * @param array|null $after Cursor [logtime, id] of the last row of the previous page.
+     * @return array rows (stdClass[]), next (cursor or null when this was the last page)
+     */
+    public static function page(int $from, int $to = 0, array $categories = [], int $limit = 100, ?array $after = null): array {
+        global $DB;
+        $limit = max(1, min(500, $limit));
+        $where = 'logtime >= :tfrom';
+        $params = ['tfrom' => $from];
+        if ($to > 0) {
+            $where .= ' AND logtime <= :tto';
+            $params['tto'] = $to;
+        }
+        if ($categories) {
+            [$insql, $inparams] = $DB->get_in_or_equal($categories, SQL_PARAMS_NAMED, 'cat');
+            $where .= " AND category $insql";
+            $params += $inparams;
+        }
+        if ($after !== null) {
+            $where .= ' AND (logtime < :atime OR (logtime = :atime2 AND id < :aid))';
+            $params += ['atime' => (int) $after[0], 'atime2' => (int) $after[0], 'aid' => (int) $after[1]];
+        }
+        $rows = array_values($DB->get_records_select(
+            'tool_ltidiagnostics_acc',
+            $where,
+            $params,
+            'logtime DESC, id DESC',
+            '*',
+            0,
+            $limit + 1
+        ));
+        $next = null;
+        if (count($rows) > $limit) {
+            array_pop($rows);
+            $last = end($rows);
+            $next = [(int) $last->logtime, (int) $last->id];
+        }
+        return ['rows' => $rows, 'next' => $next];
+    }
+
+    /**
+     * The category as it can be stored. Defence in depth for Gate 2 finding F3: an unknown category or one that does
+     * not fit the column would abort the whole import, so it is stored as "other".
+     *
+     * @param string $category Category from the parser.
+     * @return string
+     */
+    public static function storable_category(string $category): string {
+        if (!in_array($category, parser::CATEGORIES, true) || \core_text::strlen($category) > parser::CATEGORY_MAXLEN) {
+            return 'other';
+        }
+        return $category;
+    }
+
+    /**
+     * Read the stream into an existing job and finish the job.
+     *
+     * @param \stdClass $job The job record (with id, status running).
+     * @param resource $fh Open stream.
+     * @param array $o Normalised options.
+     * @param bool $zlib True for a gzopen handle.
+     * @return \stdClass The finished job.
+     */
+    private function read_into(\stdClass $job, $fh, array $o, bool $zlib): \stdClass {
+        global $DB;
         $seen = [];
         $batch = [];
         $bytes = 0;
@@ -187,7 +359,7 @@ class importer {
         $row->linehash = sha1($content . '#' . $seen[$content]);
         $row->importid = $job->id;
         $row->logtime = $time;
-        $row->category = $category;
+        $row->category = self::storable_category($category);
         return $row;
     }
 
@@ -273,5 +445,26 @@ class importer {
             0,
             max(1, min(1000, $limit))
         ));
+    }
+
+    /**
+     * Delete one import job together with every log line it stored.
+     *
+     * The lines are redacted and only LTI related, but they still relate to requests of real people, so an
+     * administrator must be able to remove them before the retention period ends.
+     *
+     * @param int $importid Import id.
+     * @return int Number of deleted log lines.
+     */
+    public static function delete_import(int $importid): int {
+        global $DB;
+        require_capability('tool/ltidiagnostics:importlogs', \context_system::instance());
+        $lines = $DB->count_records('tool_ltidiagnostics_acc', ['importid' => $importid]);
+        $transaction = $DB->start_delegated_transaction();
+        $DB->delete_records('tool_ltidiagnostics_acc', ['importid' => $importid]);
+        $DB->delete_records('tool_ltidiagnostics_imp', ['id' => $importid]);
+        $transaction->allow_commit();
+        \tool_ltidiagnostics\local\audit::log('deleteimport', '', 'job=' . $importid . ',lines=' . $lines);
+        return $lines;
     }
 }

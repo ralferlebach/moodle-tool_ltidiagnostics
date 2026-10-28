@@ -26,6 +26,8 @@ namespace tool_ltidiagnostics\local\accesslog;
  * @covers     \tool_ltidiagnostics\local\accesslog\parser
  */
 final class parser_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /** @var string A combined line with a +0200 offset. */
     private const COMBINED = '203.0.113.9 - - [24/Oct/2026:12:00:00 +0200] '
         . '"POST /mod/lti/auth.php?client_id=abc&state=xyz HTTP/1.1" 302 0 "-" "Mozilla/5.0"';
@@ -185,6 +187,9 @@ final class parser_test extends \advanced_testcase {
      */
     public function test_categorise(string $path, string $category): void {
         $this->assertSame($category, parser::categorise($path));
+        if ($category !== '') {
+            $this->assertContains($category, parser::CATEGORIES, 'Every produced category is declared (length guard).');
+        }
     }
 
     /**

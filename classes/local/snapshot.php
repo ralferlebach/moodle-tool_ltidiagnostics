@@ -169,4 +169,51 @@ class snapshot {
         $data = json_decode(reset($rows)->snapjson, true);
         return is_array($data) ? $data : [];
     }
+
+    /**
+     * Store a document of a given kind for a connection (partner package, partner trace). The caller redacts it.
+     *
+     * @param string $connkey Connection key.
+     * @param string $kind Kind (at most 20 characters): partner, partnertrace.
+     * @param array $data Data.
+     * @param int $now Time.
+     * @return int Record id.
+     */
+    public static function save_kind(string $connkey, string $kind, array $data, int $now): int {
+        global $DB, $USER;
+        $json = json_encode($data, JSON_UNESCAPED_SLASHES);
+        return (int) $DB->insert_record('tool_ltidiagnostics_snap', (object) [
+            'connkey' => $connkey,
+            'kind' => \core_text::substr($kind, 0, 20),
+            'contenthash' => hash('sha256', (string) $json),
+            'snapjson' => $json,
+            'userid' => (int) ($USER->id ?? 0),
+            'timecreated' => $now,
+        ]);
+    }
+
+    /**
+     * Newest stored document of a kind.
+     *
+     * @param string $connkey Connection key.
+     * @param string $kind Kind.
+     * @return array|null Data plus "_time" (storage time), or null.
+     */
+    public static function latest_kind(string $connkey, string $kind): ?array {
+        global $DB;
+        $rows = $DB->get_records(
+            'tool_ltidiagnostics_snap',
+            ['connkey' => $connkey, 'kind' => $kind],
+            'timecreated DESC, id DESC',
+            'id, snapjson, timecreated',
+            0,
+            1
+        );
+        if (!$rows) {
+            return null;
+        }
+        $row = reset($rows);
+        $data = json_decode($row->snapjson, true);
+        return is_array($data) ? $data + ['_time' => (int) $row->timecreated] : null;
+    }
 }

@@ -35,6 +35,24 @@ admin_externalpage_setup('tool_ltidiagnostics_logimport', '', null, $url);
 $context = context_system::instance();
 require_capability('tool/ltidiagnostics:importlogs', $context);
 
+$delete = optional_param('delete', 0, PARAM_INT);
+if ($delete) {
+    // Deleting needs the confirmation page and a valid session key.
+    require_sesskey();
+    if (!optional_param('confirm', 0, PARAM_BOOL)) {
+        echo $OUTPUT->header();
+        echo $OUTPUT->confirm(
+            get_string('deleteimport_confirm', 'tool_ltidiagnostics', $delete),
+            new moodle_url($url, ['delete' => $delete, 'confirm' => 1, 'sesskey' => sesskey()]),
+            $url
+        );
+        echo $OUTPUT->footer();
+        exit;
+    }
+    $lines = importer::delete_import($delete);
+    redirect($url, get_string('deleteimport_done', 'tool_ltidiagnostics', $lines), null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 $form = new \tool_ltidiagnostics\form\import_form($url);
 $job = null;
 if ($data = $form->get_data()) {
@@ -100,5 +118,5 @@ if ($job) {
     );
 }
 $form->display();
-echo $output->imports_table($DB->get_records('tool_ltidiagnostics_imp', null, 'timecreated DESC, id DESC', '*', 0, 20));
+echo $output->imports_table($DB->get_records('tool_ltidiagnostics_imp', null, 'timecreated DESC, id DESC', '*', 0, 20), true);
 echo $output->footer();

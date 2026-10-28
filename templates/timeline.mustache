@@ -28,12 +28,80 @@
             {"time": "2026-10-24 10:00:00", "stage": "Launch", "source": "Observer", "event": "\\core\\event\\user_loggedin", "links": [
                 {"text": "Follow-up (direct)"}]}
         ],
-        "sources": [{"label": "Logstore", "available": true, "statelabel": "available"}]
+        "sources": [{"label": "Logstore", "available": true, "statelabel": "available"}],
+        "covheaders": {"caption": "Coverage of the sources", "source": "Source", "count": "Items", "first": "First (UTC)", "last": "Last (UTC)", "note": "Remark"},
+        "covintro": "A source without rows says nothing about what happened.",
+        "hascoverage": true,
+        "coverage": [{"label": "Logstore", "count": 3, "first": "2026-10-24 10:00:00", "last": "2026-10-24 11:00:00", "note": "complete", "incomplete": false}],
+        "hastransactions": true,
+        "txintro": "Transfers of LTI family plugins, grouped by correlation id.",
+        "txheaders": {"caption": "Transfers", "correlationid": "Correlation id", "component": "Plugin", "connection": "Connection", "first": "First (UTC)", "last": "Last (UTC)", "steps": "Steps", "outcome": "Outcome"},
+        "transactions": [{"correlationid": "0f1e", "component": "local_lticompletionsync", "connection": "tool:3:4", "first": "2026-10-24 10:00:00", "last": "2026-10-24 10:00:05", "steps": "queued > sent > acknowledged", "outcomecode": "acknowledged", "outcome": "Acknowledged by the receiver"}]
     }
 }}
 <ul class="list-inline">
-    {{#sources}}<li class="list-inline-item"><span class="badge {{#available}}bg-success{{/available}}{{^available}}bg-secondary{{/available}}">{{statelabel}}</span> {{label}}</li>{{/sources}}
+    {{#sources}}<li class="list-inline-item"><span class="badge {{#available}}bg-success text-white{{/available}}{{^available}}bg-secondary text-dark{{/available}}">{{statelabel}}</span> {{label}}</li>{{/sources}}
 </ul>
+{{#hascoverage}}
+<p class="text-muted">{{covintro}}</p>
+<div class="table-responsive">
+<table class="table table-sm generaltable" id="tool_ltidiagnostics_coverage">
+    <caption>{{covheaders.caption}}</caption>
+    <thead>
+        <tr>
+            <th scope="col">{{covheaders.source}}</th>
+            <th scope="col">{{covheaders.count}}</th>
+            <th scope="col">{{covheaders.first}}</th>
+            <th scope="col">{{covheaders.last}}</th>
+            <th scope="col">{{covheaders.note}}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{#coverage}}
+        <tr data-incomplete="{{#incomplete}}1{{/incomplete}}{{^incomplete}}0{{/incomplete}}">
+            <th scope="row">{{label}}</th>
+            <td>{{count}}</td>
+            <td>{{first}}</td>
+            <td>{{last}}</td>
+            <td>{{note}}</td>
+        </tr>
+        {{/coverage}}
+    </tbody>
+</table>
+</div>
+{{/hascoverage}}
+{{#hastransactions}}
+<p class="text-muted">{{txintro}}</p>
+<div class="table-responsive">
+<table class="table table-sm generaltable" id="tool_ltidiagnostics_transactions">
+    <caption>{{txheaders.caption}}</caption>
+    <thead>
+        <tr>
+            <th scope="col">{{txheaders.correlationid}}</th>
+            <th scope="col">{{txheaders.component}}</th>
+            <th scope="col">{{txheaders.connection}}</th>
+            <th scope="col">{{txheaders.first}}</th>
+            <th scope="col">{{txheaders.last}}</th>
+            <th scope="col">{{txheaders.steps}}</th>
+            <th scope="col">{{txheaders.outcome}}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{#transactions}}
+        <tr data-correlationid="{{correlationid}}" data-outcome="{{outcomecode}}">
+            <th scope="row"><code>{{correlationid}}</code></th>
+            <td>{{component}}</td>
+            <td>{{connection}}</td>
+            <td>{{first}}</td>
+            <td>{{last}}</td>
+            <td>{{steps}}</td>
+            <td>{{outcome}}</td>
+        </tr>
+        {{/transactions}}
+    </tbody>
+</table>
+</div>
+{{/hastransactions}}
 {{#empty}}<p class="alert alert-info">{{empty}}</p>{{/empty}}
 {{^empty}}
 <div class="table-responsive">
@@ -55,7 +123,7 @@
             <td>{{stage}}</td>
             <td>{{source}}</td>
             <td>{{event}}</td>
-            <td>{{#links}}<div>&rarr; {{text}}</div>{{/links}}</td>
+            <td>{{#links}}<div><span aria-hidden="true">&rarr;</span> {{text}}</div>{{/links}}</td>
         </tr>
         {{/rows}}
     </tbody>

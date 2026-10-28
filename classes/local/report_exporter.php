@@ -103,17 +103,77 @@ class report_exporter {
         foreach ($report['matrix'] as $row) {
             $md .= '| ' . $esc($row['label']) . ' | ' . $t('status_' . $row['status']) . ' | ' . $esc($row['reason']) . " |\n";
         }
+        if (!empty($report['rootcause'])) {
+            $md .= "\n## " . $t('report_rootcause') . "\n\n" . $report['rootcause'] . "\n";
+        }
         $md .= "\n## " . $t('report_findings') . "\n\n";
         foreach ($report['findings'] as $f) {
             $md .= '### [' . $t('severity_' . $f['severity']) . '] ' . $esc($f['title']) . "\n\n";
             $md .= '- ' . $t('layer') . ': ' . $t('layer_' . $f['layer']) . ' (' . $f['testid'] . ")\n";
             $md .= '- ' . $t('responsible') . ': ' . $t('responsible_' . $f['responsible']) . "\n";
+            if (!empty($f['system'])) {
+                $md .= '- ' . $t('systemlabel') . ': ' . $t('system_' . $f['system']) . "\n";
+                $md .= '- ' . $t('certaintylabel') . ': ' . $t('certainty_' . $f['certainty']) . "\n";
+                $md .= '- ' . $t('checklabel') . ': ' . $esc($f['check']) . "\n";
+            }
             $md .= '- ' . $t('detail') . ': ' . $esc($f['detail']) . "\n";
             $md .= '- ' . $t('intervention') . ': ' . $esc($f['fix']) . "\n";
             $md .= '- ' . $t('risk') . ': ' . $t('risk_' . $f['risk']) . "\n";
             $md .= '- ' . $t('verification') . ': ' . $esc($f['verify']) . "\n";
+            $md .= '- ' . $t('wherelabel') . ': ' . $esc($f['where']) . "\n";
+            if ($f['alternative'] !== '') {
+                $md .= '- ' . $t('alternativecause') . ': ' . $esc($f['alternative']) . "\n";
+            }
+            $md .= '- ' . $t('uncertainlabel') . ': ' . $esc($f['uncertain']) . "\n";
+            if (!empty($f['consequence'])) {
+                $md .= '- ' . $t('consequencenote') . "\n";
+            }
             $conf = $f['confidence'] !== '' ? ', ' . $f['confidence'] : '';
             $md .= '- ' . $t('evidence') . ': ' . $f['evidencekind'] . $conf . "\n\n";
+        }
+        if (!empty($report['observability'])) {
+            $md .= '## ' . $t('report_observability') . "\n\n";
+            $md .= '| ' . $t('obs_transaction') . ' | ' . $t('direction') . ' | ' . $t('obs_request') . ' | ' . $t('obs_response')
+                . " |\n|---|---|---|---|\n";
+            foreach ($report['observability'] as $o) {
+                $cells = [];
+                foreach (['request', 'response'] as $part) {
+                    $cell = $o[$part];
+                    $seen = $cell['seen'] !== '' ? $cell['seen'] : $t('obs_notseen');
+                    $cells[] = $t('obslevel_' . $cell['level']) . ' / ' . $seen;
+                }
+                $md .= '| ' . $esc($o['label']) . ' | ' . $t('obsdir_' . $o['direction']) . ' | ' . $esc($cells[0]) . ' | '
+                    . $esc($cells[1]) . " |\n";
+            }
+            $md .= "\n";
+        }
+        if (!empty($report['messages'])) {
+            $md .= '## ' . $t('report_messages') . "\n\n";
+            $md .= '| ' . $t('msg_message') . ' | ' . $t('direction') . ' | ' . $t('msg_configured') . ' | ' . $t('msg_observed')
+                . ' | ' . $t('msg_verified') . ' | ' . $t('msg_booked') . ' | ' . $t('msg_state')
+                . " |\n|---|---|---|---|---|---|---|\n";
+            foreach ($report['messages'] as $m) {
+                $observed = $t('obslevel_' . $m['observed']) . ($m['seen'] !== '' ? ' / ' . $m['seen'] : '');
+                $md .= '| ' . $esc($m['label']) . ' | ' . $t('msgdir_' . $m['direction']) . ' | '
+                    . $t('msgconf_' . $m['configured'])
+                    . ' | ' . $esc($observed) . ' | ' . ($m['verified'] ? $t('yes') : $t('no')) . ' | '
+                    . $t('msgbooked_' . $m['booked']) . ' | ' . $t('msgstate_' . $m['state'])
+                    . ($m['limit'] !== '' ? ' (' . $esc($t('msglimit_' . $m['limit'])) . ')' : '') . " |\n";
+            }
+            $md .= "\n## " . $t('report_chains') . "\n\n";
+            foreach ($report['chains'] as $ch) {
+                $md .= '- ' . $t('chain_' . $ch['id']) . ': ' . $t('verdict_' . $ch['verdict'])
+                    . ($ch['weakest'] !== '' ? ' (' . $t('msg_' . $ch['weakest']) . ': ' . $t('chainreason_' . $ch['reason'])
+                    . ')' : '')
+                    . "\n";
+            }
+            $md .= "\n## " . $t('report_fields') . "\n\n| " . $t('field') . ' | ' . $t('field_local') . ' | '
+                . $t('field_partner') . ' | ' . $t('field_agreement') . " |\n|---|---|---|---|\n";
+            foreach ($report['fields'] as $f) {
+                $md .= '| ' . $esc($f['field']) . ' | ' . $esc($f['local']) . ' | ' . $esc($f['partner'] !== '' ? $f['partner']
+                    : $t('field_nopartner')) . ' | ' . $esc($f['agreement']) . " |\n";
+            }
+            $md .= "\n";
         }
         if ($report['delta']) {
             $md .= '## ' . $t('report_delta') . "\n\n";
@@ -153,6 +213,33 @@ class report_exporter {
             fputcsv($fh, array_map([self::class, 'cell'], array_merge(['finding', $f['testid'], $f['layer'], $f['severity'],
                 $f['responsible'], $f['risk'], $f['title'], $f['detail'], $f['fix'], $f['evidencekind'], $f['confidence'],
                 $f['checkedat']], $meta)), ',', '"', '\\');
+        }
+        foreach ($report['observability'] ?? [] as $o) {
+            foreach (['request', 'response'] as $part) {
+                $cell = $o[$part];
+                fputcsv($fh, array_map([self::class, 'cell'], array_merge(['observability', $o['transaction'] . '.' . $part,
+                    $o['transaction'], $cell['level'], '', '', $o['label'], $o['direction'] . '/' . $part, '', '', '',
+                    $cell['seen']], $meta)), ',', '"', '\\');
+            }
+        }
+        foreach ($report['messages'] ?? [] as $m) {
+            fputcsv(
+                $fh,
+                array_map([self::class, 'cell'], array_merge(['message', $m['id'], $m['group'], $m['state'], '', '',
+                $m['label'], $m['direction'] . '/configured=' . $m['configured'] . '/observed=' . $m['observed'] . '/verified='
+                . ($m['verified'] ? '1' : '0') . '/booked=' . $m['booked'], $m['limit'], '', '', $m['seen']], $meta)),
+                ',',
+                '"',
+                '\\'
+            );
+        }
+        foreach ($report['chains'] ?? [] as $ch) {
+            fputcsv($fh, array_map([self::class, 'cell'], array_merge(['chain', $ch['id'], $ch['weakest'], $ch['verdict'], '', '',
+                $ch['id'], $ch['reason'], '', '', '', ''], $meta)), ',', '"', '\\');
+        }
+        foreach ($report['fields'] ?? [] as $f) {
+            fputcsv($fh, array_map([self::class, 'cell'], array_merge(['field', $f['field'], $f['category'], $f['local'], '', '',
+                $f['field'], 'partner=' . $f['partner'], $f['agreement'], $f['evidence'], '', ''], $meta)), ',', '"', '\\');
         }
         rewind($fh);
         $csv = stream_get_contents($fh);

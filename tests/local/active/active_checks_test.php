@@ -28,6 +28,8 @@ namespace tool_ltidiagnostics\local\active;
  * @covers     \tool_ltidiagnostics\local\active\active_checker
  */
 final class active_checks_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /**
      * Build a fetch result.
      *
@@ -70,6 +72,18 @@ final class active_checks_test extends \advanced_testcase {
             'server error' => [['httpstatus' => 502], 'http_server_error'],
             'proxy 407' => [['httpstatus' => 407], 'proxy_407'],
             'proxy connect 407' => [['errno' => 56, 'error' => 'CONNECT tunnel failed, response 407'], 'proxy_407'],
+            'proxy connect 407, older curl' => [['errno' => 56, 'error' => 'Received HTTP code 407 from proxy after CONNECT'],
+                'proxy_407'],
+            // Regression (full matrix 2026-10-28): a connect timeout to a port containing 407 is not a proxy answer.
+            'firewall drop to port 45407' => [['errno' => 28, 'info' => ['connect_time' => 0, 'namelookup_time' => 0],
+                'error' => 'Failed to connect to lab.diag.test port 45407 after 2001 ms: Timeout was reached'],
+                'firewall_drop_suspected'],
+            'refused on port 4070' => [['errno' => 7,
+                'error' => 'Failed to connect to x.test port 4070 after 0 ms: Could not connect to server'], 'connection_refused'],
+            'timeout after 1407 ms' => [['errno' => 28, 'info' => ['connect_time' => 0.2],
+                'error' => 'Operation timed out after 1407 milliseconds with 0 bytes received'], 'timeout'],
+            'proxy refused tunnel with 403' => [['errno' => 56, 'error' => 'CONNECT tunnel failed, response 403'],
+                'transfer_error'],
             'proxy error' => [['errno' => 5], 'proxy_error'],
             'nxdomain' => [['errno' => 6], 'dns_failure'],
             'refused' => [['errno' => 7], 'connection_refused'],
@@ -82,6 +96,11 @@ final class active_checks_test extends \advanced_testcase {
             'missing intermediate' => [['errno' => 60, 'info' => ['ssl_verify_result' => 21]], 'cert_chain_incomplete'],
             'unknown ca' => [['errno' => 60, 'info' => ['ssl_verify_result' => 19]], 'cert_untrusted'],
             'host mismatch errno 51' => [['errno' => 51], 'cert_hostname'],
+            'host mismatch curl 7.62+' => [['errno' => 60, 'info' => ['ssl_verify_result' => 1],
+                'error' => "SSL: no alternative certificate subject name matches target host name 'x.test'"], 'cert_hostname'],
+            'firewall drop with pinned address' => [['errno' => 28, 'info' => ['connect_time' => 0, 'namelookup_time' => 0],
+                'error' => 'Failed to connect to x.test port 443 after 2005 ms: Timeout was reached'], 'firewall_drop_suspected'],
+            'timeout without any detail' => [['errno' => 28, 'info' => ['connect_time' => 0, 'namelookup_time' => 0]], 'timeout'],
             'handshake' => [['errno' => 35], 'tls_handshake'],
             'other transfer error' => [['errno' => 18], 'transfer_error'],
             'no status' => [[], 'transfer_error'],

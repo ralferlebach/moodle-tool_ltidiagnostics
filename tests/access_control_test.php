@@ -32,8 +32,12 @@ use tool_ltidiagnostics\local\support;
  * @covers     \tool_ltidiagnostics\local\support
  */
 final class access_control_test extends \advanced_testcase {
+    use \tool_ltidiagnostics\tests\deprecation_guarded;
+
     /** @var string[] All capabilities of the plugin. */
-    private const CAPS = ['view', 'viewcourse', 'viewsupport', 'viewprivacy', 'configure', 'runchecks', 'importlogs', 'export'];
+    private const CAPS = ['view', 'viewcourse', 'viewsupport', 'viewprivacy', 'configure', 'runchecks',
+        'runprivatechecks', 'importlogs',
+        'export'];
 
     /**
      * Create a user that holds the given capabilities in the system context only.
@@ -68,14 +72,15 @@ final class access_control_test extends \advanced_testcase {
         $this->assertCount(count(self::CAPS), $caps);
         $expected = [
             'view' => RISK_PERSONAL | RISK_CONFIG, 'viewprivacy' => RISK_PERSONAL, 'configure' => RISK_CONFIG,
-            'runchecks' => RISK_CONFIG, 'importlogs' => RISK_PERSONAL | RISK_CONFIG, 'export' => RISK_PERSONAL,
+            'runchecks' => RISK_CONFIG, 'runprivatechecks' => RISK_CONFIG,
+            'importlogs' => RISK_PERSONAL | RISK_CONFIG, 'export' => RISK_PERSONAL,
             'viewcourse' => 0, 'viewsupport' => 0,
         ];
         foreach ($expected as $name => $risk) {
             $this->assertSame($risk, (int) $caps["tool/ltidiagnostics:$name"]->riskbitmask, $name);
         }
         $this->assertSame((int) CONTEXT_COURSE, (int) $caps['tool/ltidiagnostics:viewcourse']->contextlevel);
-        foreach (['configure', 'runchecks', 'importlogs'] as $writer) {
+        foreach (['configure', 'runchecks', 'runprivatechecks', 'importlogs'] as $writer) {
             $this->assertSame('write', $caps["tool/ltidiagnostics:$writer"]->captype, $writer);
         }
         // Defaults per archetype.

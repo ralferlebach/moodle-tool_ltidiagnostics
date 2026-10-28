@@ -37,7 +37,7 @@ use tool_ltidiagnostics\local\timeline;
 
 $key = required_param('key', PARAM_RAW);
 $tab = optional_param('tab', 'matrix', PARAM_ALPHA);
-$tabs = ['matrix', 'health', 'timeline', 'evidence', 'history'];
+$tabs = ['matrix', 'health', 'messages', 'timeline', 'evidence', 'history'];
 if (!in_array($tab, $tabs, true)) {
     $tab = 'matrix';
 }
@@ -165,6 +165,9 @@ if ($tab === 'matrix') {
         get_string('editprofile', 'tool_ltidiagnostics'),
         ['class' => 'btn btn-secondary']
     );
+} else if ($tab === 'messages') {
+    $result = (new health_check())->run($conn, $now, ['profile' => $profile, 'probes' => $storedprobes, 'filters' => $filters]);
+    echo $output->messages_tab($result);
 } else if ($tab === 'timeline') {
     $tl = (new timeline())->build($conn, $context, $filters, $now);
     echo $output->timeline($tl);
@@ -173,6 +176,21 @@ if ($tab === 'matrix') {
 } else if ($tab === 'history') {
     echo $output->history_tab($key);
 }
+
+// Two-site diagnosis: partner package (DIA-02/03) and completion sync transfers (DIA-05).
+echo html_writer::div(
+    html_writer::link(
+        new moodle_url('/admin/tool/ltidiagnostics/partner.php', ['key' => $key]),
+        get_string('partner_title', 'tool_ltidiagnostics'),
+        ['class' => 'btn btn-secondary mr-2 me-2', 'id' => 'ltidiag-partnerlink']
+    )
+    . html_writer::link(
+        new moodle_url('/admin/tool/ltidiagnostics/transfers.php', ['key' => $key] + array_filter($filters)),
+        get_string('transfers_title', 'tool_ltidiagnostics'),
+        ['class' => 'btn btn-secondary', 'id' => 'ltidiag-transferslink']
+    ),
+    'my-3'
+);
 
 if (has_capability('tool/ltidiagnostics:export', $context)) {
     echo $output->heading(get_string('export', 'tool_ltidiagnostics'), 3);

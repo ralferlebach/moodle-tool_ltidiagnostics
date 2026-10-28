@@ -34,17 +34,26 @@ class url_guard {
     /**
      * Check a URL.
      *
+     * An entry of the exact allow-list (setting privatetargetallowlist, "host" or "host:port", see
+     * {@see self::exact_allowed()}) lifts only the range rules for exactly that host and port: the scheme stays https,
+     * credentials stay refused, a redirect to any other private target is refused again.
+     *
      * @param string $url The URL to request.
      * @param bool $allowprivate True when private and loopback targets (and plain http) were explicitly allowed.
+     * @param string[]|null $exact Exact allow-list (null: the plugin setting).
      * @return string "ok" or a reason code: empty, toolong, malformed, scheme, credentials, host, blocked
      */
-    public static function check(string $url, bool $allowprivate = false): string {
+    public static function check(string $url, bool $allowprivate = false, ?array $exact = null): string {
         $url = trim($url);
         if ($url === '') {
             return 'empty';
         }
-        if (strlen($url) > 2000 || preg_match('/[\x00-\x20\x7f]/', $url)) {
+        if (strlen($url) > 2000 || preg_match('/[\x00-\x20\x7f\\\\]/', $url)) {
+            // Control characters, blanks and backslashes are parsed differently by PHP and by curl.
             return strlen($url) > 2000 ? 'toolong' : 'malformed';
+        }
+        if (preg_match('#^[A-Za-z][A-Za-z0-9+.\-]*://([^/?\#]*)#', $url, $m) && strpos($m[1], '@') !== false) {
+            return 'credentials';
         }
         $parts = parse_url($url);
         if ($parts === false || empty($parts['scheme']) || empty($parts['host'])) {
@@ -60,7 +69,14 @@ class url_guard {
         if (!preg_match('/^[A-Za-z0-9.\-\[\]:]+\z/', $parts['host'])) {
             return 'host';
         }
+        if (isset($parts['port']) && ($parts['port'] < 1 || $parts['port'] > 65535)) {
+            return 'malformed';
+        }
         if ($allowprivate) {
+            return self::OK;
+        }
+        if (self::exact_allowed($url, $exact)) {
+            // An administrator named exactly this host and port; the address it resolves to is pinned by the fetcher.
             return self::OK;
         }
         // The built-in rules do not depend on the site's configuration, which an administrator may have emptied.
@@ -72,6 +88,68 @@ class url_guard {
             return 'blocked';
         }
         return self::OK;
+    }
+
+    /**
+     * The exact allow-list of private targets from the plugin setting (one "host" or "host:port" per line).
+     *
+     * @return string[] Normalised entries "host:port".
+     */
+    public static function exact_list(): array {
+        $out = [];
+        foreach (\tool_ltidiagnostics\local\config::get_list('privatetargetallowlist') as $entry) {
+            $norm = self::normalise_target($entry);
+            if ($norm !== null) {
+                $out[] = $norm;
+            }
+        }
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Normalise an allow-list entry or a URL authority to "host:port" (default port 443, lower case, brackets kept
+     * for IPv6). Wildcards, paths and schemes other than https are not accepted.
+     *
+     * @param string $entry "host", "host:port" or "[v6]:port".
+     * @return string|null
+     */
+    public static function normalise_target(string $entry): ?string {
+        $entry = strtolower(trim($entry));
+        if ($entry === '' || strpbrk($entry, "*/?#@ \t") !== false) {
+            return null;
+        }
+        if (
+            preg_match('/^(\[[0-9a-f:.]+\])(?::(\d{1,5}))?$/', $entry, $m)
+                || preg_match('/^([a-z0-9.\-]+)(?::(\d{1,5}))?$/', $entry, $m)
+        ) {
+            $port = isset($m[2]) && $m[2] !== '' ? (int) $m[2] : 443;
+            if ($port < 1 || $port > 65535) {
+                return null;
+            }
+            return rtrim($m[1], '.') . ':' . $port;
+        }
+        return null;
+    }
+
+    /**
+     * Whether the host and port of a URL are named in the exact allow-list.
+     *
+     * @param string $url URL (already parsed successfully).
+     * @param string[]|null $exact Normalised list (null: the plugin setting).
+     * @return bool
+     */
+    public static function exact_allowed(string $url, ?array $exact = null): bool {
+        $exact = $exact ?? self::exact_list();
+        if (!$exact) {
+            return false;
+        }
+        $parts = parse_url($url);
+        if (!is_array($parts) || strtolower((string) ($parts['scheme'] ?? '')) !== 'https' || empty($parts['host'])) {
+            return false;
+        }
+        $host = (string) $parts['host'];
+        $target = self::normalise_target($host . (isset($parts['port']) ? ':' . $parts['port'] : ''));
+        return $target !== null && in_array($target, $exact, true);
     }
 
     /**
@@ -100,7 +178,10 @@ class url_guard {
     }
 
     /**
-     * Whether an IP address is private, loopback, link-local, reserved or an IPv4-mapped form of one.
+     * Whether an IP address is private, loopback, link-local, reserved or a tunnel or translation form of one.
+     *
+     * IPv6 forms that embed an IPv4 address (mapped, compatible, NAT64, 6to4) are judged by the embedded
+     * address; Teredo, documentation, discard and site-local ranges are refused as a whole.
      *
      * @param string $ip Address without brackets.
      * @return bool True for unusable or internal addresses, also for strings that are no address.
@@ -111,35 +192,91 @@ class url_guard {
             return true;
         }
         if (strpos($ip, ':') !== false) {
-            $packed = inet_pton($ip);
-            if ($packed === false) {
-                return true;
-            }
-            // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible forms are judged by the embedded IPv4 address.
-            $prefix = substr($packed, 0, 12);
-            if ($prefix === str_repeat("\0", 10) . "\xff\xff" || $prefix === str_repeat("\0", 12)) {
-                $v4 = inet_ntop(substr($packed, 12));
-                return $v4 === false || self::is_internal_address($v4);
-            }
-            $first = ord($packed[0]);
-            if (($first & 0xfe) === 0xfc || ($first === 0xfe && (ord($packed[1]) & 0xc0) === 0x80) || $first === 0xff) {
-                return true; // Unique local, link-local and multicast.
-            }
+            return self::is_internal_ipv6($ip);
         }
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+        return self::is_internal_ipv4($ip);
+    }
+
+    /**
+     * IPv4 classification.
+     *
+     * @param string $ip Dotted quad.
+     * @return bool
+     */
+    private static function is_internal_ipv4(string $ip): bool {
+        $flags = FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE;
+        if (filter_var($ip, FILTER_VALIDATE_IP, $flags) === false) {
             return true;
         }
-        if (strpos($ip, ':') === false) {
-            // Ranges that PHP does not flag: shared address space (carrier grade NAT) and benchmarking.
-            $long = ip2long($ip);
-            foreach (['100.64.0.0/10', '198.18.0.0/15', '192.0.0.0/24'] as $range) {
-                [$net, $bits] = explode('/', $range);
-                $mask = -1 << (32 - (int) $bits);
-                if (($long & $mask) === (ip2long($net) & $mask)) {
-                    return true;
-                }
+        $long = ip2long($ip);
+        if ($long === false) {
+            return true;
+        }
+        // Ranges that PHP does not flag: shared address space (carrier grade NAT), benchmarking, protocol
+        // assignments, documentation, 6to4 relays and multicast.
+        $ranges = ['100.64.0.0/10', '198.18.0.0/15', '192.0.0.0/24', '192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24',
+            '192.88.99.0/24', '224.0.0.0/4'];
+        foreach ($ranges as $range) {
+            [$net, $bits] = explode('/', $range);
+            $mask = -1 << (32 - (int) $bits);
+            if (($long & $mask) === (ip2long($net) & $mask)) {
+                return true;
             }
         }
         return false;
+    }
+
+    /**
+     * IPv6 classification.
+     *
+     * @param string $ip Valid IPv6 address.
+     * @return bool
+     */
+    private static function is_internal_ipv6(string $ip): bool {
+        $packed = inet_pton($ip);
+        if ($packed === false || strlen($packed) !== 16) {
+            return true;
+        }
+        $zeros10 = str_repeat("\0", 10);
+        $prefix = substr($packed, 0, 12);
+        // IPv4-mapped (::ffff:a.b.c.d), IPv4-compatible (::a.b.c.d) and IPv4-translated (::ffff:0:a.b.c.d).
+        if ($prefix === $zeros10 . "\xff\xff" || $prefix === str_repeat("\0", 12)) {
+            return self::is_internal_ipv4(inet_ntop(substr($packed, 12)));
+        }
+        if ($prefix === str_repeat("\0", 8) . "\xff\xff\0\0") {
+            return self::is_internal_ipv4(inet_ntop(substr($packed, 12)));
+        }
+        // NAT64 well-known prefix 64:ff9b::/96 and local-use prefix 64:ff9b:1::/48.
+        if (substr($packed, 0, 12) === "\x00\x64\xff\x9b" . str_repeat("\0", 8)) {
+            return self::is_internal_ipv4(inet_ntop(substr($packed, 12)));
+        }
+        if (substr($packed, 0, 6) === "\x00\x64\xff\x9b\x00\x01") {
+            return true;
+        }
+        // 6to4 (2002::/16) embeds the IPv4 address in bits 16 to 47.
+        if (substr($packed, 0, 2) === "\x20\x02") {
+            return self::is_internal_ipv4(inet_ntop(substr($packed, 2, 4)));
+        }
+        $first = ord($packed[0]);
+        $second = ord($packed[1]);
+        if (
+            ($first & 0xfe) === 0xfc                       // Unique local fc00::/7.
+            || ($first === 0xfe && ($second & 0xc0) === 0x80) // Link-local fe80::/10.
+            || ($first === 0xfe && ($second & 0xc0) === 0xc0) // Site-local fec0::/10 (deprecated).
+            || $first === 0xff                              // Multicast.
+        ) {
+            return true;
+        }
+        if (substr($packed, 0, 4) === "\x20\x01\x00\x00") {
+            return true; // Teredo 2001::/32.
+        }
+        if (substr($packed, 0, 4) === "\x20\x01\x0d\xb8") {
+            return true; // Documentation 2001:db8::/32.
+        }
+        if (substr($packed, 0, 8) === "\x01\x00" . str_repeat("\0", 6)) {
+            return true; // Discard-only 100::/64.
+        }
+        $flags = FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE;
+        return filter_var($ip, FILTER_VALIDATE_IP, $flags) === false;
     }
 }

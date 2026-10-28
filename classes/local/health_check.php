@@ -31,6 +31,8 @@ use tool_ltidiagnostics\local\active\active_checker;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class health_check {
+    /** @var string[] Findings that state a lack of evidence ("not yet observed"), not a fault: never a root cause. */
+    private const NOT_CAUSES = ['adv_notverified', 'adv_unknown', 'adv_evidenceweak'];
     /** @var string[] Probe codes that belong to the DNS and network layer. */
     private const NETWORK_CODES = ['dns_failure', 'connection_refused', 'timeout', 'proxy_407', 'proxy_error', 'transfer_error',
         'blocked_by_policy'];
@@ -61,15 +63,53 @@ class health_check {
             'adhoc' => $tasks->adhoc(),
             'tasklogfailed' => $tasks->task_log(['onlyfailed' => true, 'from' => $now - DAYSECS, 'limit' => 50]),
             'recordevents' => (bool) config::get('recordevents'),
+            'activechecks' => (bool) config::get('activechecks'),
             'imports' => (int) $DB->count_records('tool_ltidiagnostics_imp', ['status' => 'done']),
+            'logstorelogging' => (bool) array_filter(array_column($logstore->describe(), 'logging')),
+            'familyemitter' => family_events::emitter_installed(),
+            'cronwindows' => $tasks->cron_windows($now - DAYSECS, $now, 2 * HOURSECS),
         ];
+        $partner = self::partner_inputs($c, $now);
         return $this->evaluate($c, [
             'now' => $now,
             'facts' => $facts,
             'probes' => $options['probes'] ?? [],
             'profile' => $options['profile'] ?? null,
             'env' => $env,
-        ]);
+        ] + $partner);
+    }
+
+    /**
+     * Inputs from the newest imported partner package of the connection (see {@see partner_package}): its comparison
+     * findings, the key comparison (also of the last live check) and its field column. Nothing when no package was
+     * imported or it is older than the partner retention.
+     *
+     * @param connection $c Connection.
+     * @param int $now Time.
+     * @return array partnerfindings, partnerkeys, partnerfields, partnerinfo
+     */
+    public static function partner_inputs(connection $c, int $now): array {
+        $stored = snapshot::latest_kind($c->key, partner_package::KIND);
+        if ($stored === null || empty($stored['package'])) {
+            return [];
+        }
+        try {
+            $package = partner_package::parse(json_encode($stored['package']));
+        } catch (\moodle_exception $e) {
+            return [];
+        }
+        $compare = partner_package::compare($c, $package, (int) $stored['_time']);
+        $keys = $compare['keys'];
+        if (!empty($stored['live']['keys'])) {
+            $keys = $stored['live']['keys'];
+        }
+        return [
+            'partnerfindings' => $compare['findings'],
+            'partnerkeys' => $keys,
+            'partnerfields' => $package['fields'],
+            'partnerinfo' => ['diagnosticid' => $package['diagnosticid'], 'role' => $package['role'],
+                'generated' => $package['generated'], 'imported' => (int) $stored['_time']],
+        ];
     }
 
     /**
@@ -94,15 +134,38 @@ class health_check {
             $this->probe_findings($c, $probes, $now),
             $this->advantage($c, $matrix, $profile, $in['facts'], $now),
             $this->core($c, $matrix, $profile, $in['facts'], $now),
-            $this->background($in['env'], $now),
+            $this->access_findings($c, $in['facts'], $now),
+            $this->background($in['env'], $now, $in['facts']),
             $this->observability($c, $in['facts'], $in['env'], $now),
-            $this->privacy($c, $profile, $now)
+            $this->privacy($c, $profile, $now),
+            $this->token_scope_findings($c, $in['facts'], $now),
+            $in['partnerfindings'] ?? []
         );
         $findings = $this->ensure_layer_presence($findings, $probes, $now);
         usort($findings, function (finding $a, finding $b) {
             return [finding::weight($a->severity), array_search($a->layer, finding::layers()), $a->code]
                 <=> [finding::weight($b->severity), array_search($b->layer, finding::layers()), $b->code];
         });
+        $rootcause = $this->mark_root_cause($findings);
+        $observability = observability::build(
+            $c,
+            $in['facts'],
+            $probes,
+            [
+                observability::SRC_OBSERVER => !empty($in['env']['recordevents']),
+                observability::SRC_ACCESSLOG => (int) ($in['env']['imports'] ?? 0) > 0,
+                observability::SRC_PROBE => !empty($in['env']['activechecks']),
+            ] + observability::family_sources(
+                !empty($in['env']['recordevents']),
+                !empty($in['env']['logstorelogging']),
+                !empty($in['env']['familyemitter'])
+            )
+        );
+
+        $messagefacts = $in['facts'] + ['accessimported' => (int) ($in['env']['imports'] ?? 0) > 0,
+            'partnerkeys' => $in['partnerkeys'] ?? null];
+        $messages = message_matrix::build($c, $messagefacts, $observability, $probes);
+        $fields = field_matrix::build($c, $in['facts'], $in['partnerfields'] ?? null);
 
         $layers = [];
         foreach (finding::layers() as $layer) {
@@ -124,9 +187,120 @@ class health_check {
             'delta' => $profile instanceof desired_profile ? $this->delta($c, $matrix, $profile) : [],
             'layers' => $layers,
             'findings' => $findings,
+            'rootcause' => $rootcause,
+            'observability' => $observability,
+            'messages' => $messages['rows'],
+            'chains' => $messages['chains'],
+            'fields' => $fields,
+            'partner' => $in['partnerinfo'] ?? null,
             'summary' => $counts,
             'checkedat' => $now,
         ];
+    }
+
+    /**
+     * Find the most likely root cause and flag the findings that are probably only consequences of it.
+     *
+     * The root cause is the most urgent finding in the earliest layer of the dependency chain (configuration, network,
+     * firewall, TLS, OIDC/JWT, OAuth 2, LTI Advantage, Moodle core). Findings of later layers that rest on an active
+     * probe or on an access log are flagged as consequences, because a broken lower layer makes them unreliable.
+     * Background processing is independent of the chain and never flagged. Without any blocking or warning finding
+     * there is no root cause; the check never invents one.
+     *
+     * @param finding[] $findings Sorted findings (modified: the consequence flag).
+     * @return finding|null The root cause.
+     */
+    private function mark_root_cause(array $findings): ?finding {
+        $chain = finding::dependency_chain();
+        $root = null;
+        foreach ([finding::BLOCKING, finding::WARNING] as $severity) {
+            foreach ($chain as $layer) {
+                foreach ($findings as $f) {
+                    if ($f->layer === $layer && $f->severity === $severity && !in_array($f->code, self::NOT_CAUSES, true)) {
+                        $root = $f;
+                        break 3;
+                    }
+                }
+            }
+            if ($root === null && $severity === finding::BLOCKING) {
+                // Background failures are root causes of their own when nothing in the chain is blocking.
+                foreach ($findings as $f) {
+                    if ($f->layer === finding::L_BACKGROUND && $f->severity === finding::BLOCKING) {
+                        $root = $f;
+                        break 2;
+                    }
+                }
+            }
+        }
+        if ($root === null) {
+            return null;
+        }
+        $rootindex = array_search($root->layer, $chain, true);
+        if ($rootindex !== false && $rootindex <= array_search(finding::L_TLS, $chain, true)) {
+            foreach ($findings as $f) {
+                $index = array_search($f->layer, $chain, true);
+                $derived = in_array($f->evidencekind, [status::KIND_PROBE, status::KIND_ACCESSLOG], true);
+                if (
+                    $index !== false && $index > $rootindex && $derived && $f !== $root
+                        && in_array($f->severity, [finding::BLOCKING, finding::WARNING], true)
+                ) {
+                    $f->consequence = true;
+                }
+            }
+        }
+        return $root;
+    }
+
+    /**
+     * Findings derived from the status codes in imported web server logs. A status code shows THAT a request failed,
+     * not why: the confidence is tentative and the text names the typical causes, never a single one.
+     *
+     * @param connection $c Connection.
+     * @param array $facts Facts.
+     * @param int $now Time.
+     * @return finding[]
+     */
+    private function access_findings(connection $c, array $facts, int $now): array {
+        $out = [];
+        $access = $facts['access'] ?? [];
+        $base = ['checkedat' => $now, 'evidencekind' => status::KIND_ACCESSLOG, 'confidence' => 'tentative'];
+        $counts = function (string $category) use ($access): ?object {
+            $ok = (int) ($access[$category]['ok'] ?? 0);
+            $fail = (int) ($access[$category]['fail'] ?? 0);
+            return $fail > 0 ? (object) ['ok' => $ok, 'fail' => $fail] : null;
+        };
+        $sev = function (object $n): string {
+            return $n->ok > 0 ? finding::WARNING : finding::BLOCKING;
+        };
+        if (($n = $counts('oidc')) !== null) {
+            $out[] = new finding('oidc_login_rejected', finding::L_OIDC, $sev($n), finding::PARTNER, $base + ['a' => $n]);
+        }
+        if ($c->role === connection::ROLE_TOOL && ($n = $counts('launch')) !== null) {
+            $out[] = new finding('core_launch_rejected', finding::L_CORE, $sev($n), finding::ADMIN, $base + ['a' => $n,
+                'risk' => 'low']);
+        }
+        if ($c->role === connection::ROLE_PLATFORM) {
+            if (($n = $counts('oauth')) !== null) {
+                $out[] = new finding('oauth_token_rejected', finding::L_OAUTH, $sev($n), finding::PARTNER, $base + ['a' => $n]);
+            }
+            $denied = 0;
+            foreach ($access as $category => $info) {
+                if (strpos($category, 'service') === 0) {
+                    $denied += (int) ($info['codes'][401] ?? 0) + (int) ($info['codes'][403] ?? 0);
+                }
+            }
+            if ($denied > 0) {
+                $out[] = new finding('oauth_service_denied', finding::L_OAUTH, finding::BLOCKING, finding::PARTNER, $base + [
+                    'a' => $denied]);
+            }
+            $scorecodes = $access['service_ags_scores']['codes'] ?? [];
+            $unmapped = (int) ($scorecodes[422] ?? 0) + (int) ($scorecodes[404] ?? 0);
+            if ($unmapped > 0) {
+                $out[] = new finding('core_score_unmapped', finding::L_CORE, finding::WARNING, finding::PARTNER, $base + [
+                    'a' => $unmapped, 'feature' => 'ags']);
+            }
+        }
+        return $out;
     }
 
     /**
@@ -254,6 +428,10 @@ class health_check {
             $code = $p['code'];
             $at = (int) ($p['checkedat'] ?? $now);
             $a = ['evidencekind' => status::KIND_PROBE, 'evidence' => 'probe:' . $purpose, 'checkedat' => $at];
+            if (!empty($p['viaproxy'])) {
+                $proxy = new finding('net_proxy_unpinned', finding::L_NETWORK, finding::INFO, finding::NETWORK, $a);
+                $out[$proxy->testid] = $proxy;
+            }
             if ($code === 'ok') {
                 $out[] = new finding('net_ok', finding::L_NETWORK, finding::OK, finding::NETWORK, $a);
                 $out[] = new finding('fw_inbound', finding::L_FIREWALL, finding::INFO, finding::PARTNER, $a);
@@ -264,7 +442,7 @@ class health_check {
                         'risk' => 'low']);
                 }
             } else {
-                $out[] = $this->probe_failure($code, $a, $purpose);
+                $out[] = $this->probe_failure($code, $a + ['a' => (string) ($p['blockreason'] ?? '')], $purpose);
             }
             if ($p['skew'] !== null && abs((int) $p['skew']) > 60) {
                 $out[] = new finding(
@@ -296,7 +474,9 @@ class health_check {
      */
     private function probe_failure(string $code, array $a, string $purpose): finding {
         if ($code === 'firewall_drop_suspected') {
-            $opts = $a + ['risk' => 'medium'];
+            // A connect timeout after a successful name lookup looks like a dropped packet, but a host that is down or an
+            // overloaded server produces the same picture: only an indication.
+            $opts = $a + ['risk' => 'medium', 'certainty' => finding::POSSIBLE];
             return new finding('probe_' . $code, finding::L_FIREWALL, finding::BLOCKING, finding::NETWORK, $opts);
         }
         if (in_array($code, self::TLS_CODES, true)) {
@@ -313,9 +493,14 @@ class health_check {
             );
         }
         if ($code === 'blocked_by_policy') {
+            $reason = (string) ($a['a'] ?? '');
+            $a['a'] = get_string('blockreason_' . ($reason !== '' ? $reason : 'blocked'), 'tool_ltidiagnostics');
             return new finding('probe_' . $code, finding::L_NETWORK, finding::NOTCHECKED, finding::ADMIN, $a);
         }
-        return new finding('probe_' . $code, finding::L_NETWORK, finding::BLOCKING, finding::NETWORK, $a + ['risk' => 'medium']);
+        // The proxy itself answered 407: the cause (missing proxy credentials of this server) is certain.
+        $certainty = $code === 'proxy_407' ? ['certainty' => finding::CERTAIN] : [];
+        return new finding('probe_' . $code, finding::L_NETWORK, finding::BLOCKING, finding::NETWORK, $a + ['risk' => 'medium']
+            + $certainty);
     }
 
     /**
@@ -471,6 +656,31 @@ class health_check {
     }
 
     /**
+     * Granted token scopes of a platform (independent of a profile): grade sync is fully enabled and tokens were issued,
+     * but none carries the score scope. The tool never asked for it (Moodle grants what the type allows and the tool
+     * requests). Read from lti_access_tokens, so the fact is certain; the reason on the tool side is not visible.
+     *
+     * @param connection $c Connection.
+     * @param array $facts Facts.
+     * @param int $now Time.
+     * @return finding[]
+     */
+    private function token_scope_findings(connection $c, array $facts, int $now): array {
+        if ($c->role !== connection::ROLE_PLATFORM || (int) ($c->facts['ags'] ?? 0) !== 2 || empty($facts['tokens']['any'])) {
+            return [];
+        }
+        foreach (array_keys($facts['tokens']['scopes'] ?? []) as $scope) {
+            if (substr((string) $scope, -strlen('lti-ags/scope/score')) === 'lti-ags/scope/score') {
+                return [];
+            }
+        }
+        $opts = ['feature' => 'ags', 'checkedat' => $now, 'evidencekind' => status::KIND_DBRECORD,
+            'evidence' => 'lti_access_tokens.scope', 'certainty' => finding::CERTAIN,
+            'a' => userdate((int) $facts['tokens']['any'])];
+        return [new finding('oauth_scope_not_granted', finding::L_OAUTH, finding::BLOCKING, finding::PARTNER, $opts)];
+    }
+
+    /**
      * Moodle core layer: local effects, kept apart from the service evidence.
      *
      * @param connection $c Connection.
@@ -519,6 +729,9 @@ class health_check {
                 ? new finding('core_group_ok', finding::L_CORE, finding::OK, finding::ADMIN, $opts)
                 : new finding('core_group_missing', finding::L_CORE, finding::WARNING, finding::ADMIN, $a);
         }
+        if ($c->role === connection::ROLE_TOOL && !empty($facts['groupenrol'])) {
+            $out = array_merge($out, groupenrol_source::findings($facts['groupenrol'], $obs, $now));
+        }
         if ($c->role === connection::ROLE_TOOL && $obs['launch'] > 0) {
             $out[] = new finding('core_launch_seen', finding::L_CORE, finding::OK, finding::ADMIN, $a + [
                 'evidencekind' => status::KIND_OBSERVED, 'a' => userdate($obs['launch'])]);
@@ -538,9 +751,10 @@ class health_check {
      *
      * @param array $env Environment.
      * @param int $now Time.
+     * @param array $facts Facts (task log summary of the grade and member synchronisation).
      * @return finding[]
      */
-    private function background(array $env, int $now): array {
+    private function background(array $env, int $now, array $facts = []): array {
         $out = [];
         $a = ['checkedat' => $now, 'evidencekind' => status::KIND_TASKLOG];
         $cron = $env['cron'];
@@ -549,6 +763,22 @@ class health_check {
         } else if ($cron['status'] === 'stale') {
             $out[] = new finding('bg_cron_stale', finding::L_BACKGROUND, finding::BLOCKING, finding::ADMIN, $a + [
                 'a' => (int) floor($cron['age'] / 60)]);
+        }
+        // Periods without any task run in the last day (DIA-04 cron windows). A gap that reaches up to now is the
+        // stale cron above; only earlier gaps are reported here. The task log keeps a limited number of runs per task, so
+        // the finding is "likely", not certain.
+        $windows = $env['cronwindows'] ?? ['gaps' => []];
+        foreach ($windows['gaps'] as [$gapstart, $gapend]) {
+            if ($gapend >= $now - 60 && $cron['status'] !== 'ok') {
+                continue;
+            }
+            if (!empty($windows['windows'])) {
+                $out[] = new finding('bg_cron_gap', finding::L_BACKGROUND, finding::WARNING, finding::ADMIN, $a + [
+                    'a' => (object) ['from' => userdate($gapstart), 'to' => userdate($gapend),
+                        'minutes' => (int) floor(($gapend - $gapstart) / 60)],
+                    'certainty' => finding::LIKELY, 'evidence' => 'tasklog:cronwindows']);
+                break;
+            }
         }
         foreach ($env['scheduled'] as $t) {
             if ($t['overdue']) {
@@ -567,6 +797,15 @@ class health_check {
             } else if ($t['due'] > 0) {
                 $out[] = new finding('bg_adhoc_pending', finding::L_BACKGROUND, finding::INFO, finding::ADMIN, $a + [
                     'a' => (object) ['class' => s($t['classname']), 'count' => $t['due']], 'evidence' => $t['classname']]);
+            }
+        }
+        foreach (['grades', 'members'] as $sync) {
+            $ok = (int) ($facts['tasklog'][$sync]['ok'] ?? 0);
+            $failed = (int) ($facts['tasklog'][$sync]['failed'] ?? 0);
+            if ($failed > 0 && $failed >= $ok) {
+                $out[] = new finding('bg_sync_failed', finding::L_BACKGROUND, finding::BLOCKING, finding::ADMIN, $a + [
+                    'a' => get_string('sync_' . $sync, 'tool_ltidiagnostics'), 'feature' => $sync === 'grades' ? 'ags' : 'nrps',
+                    'evidence' => 'tasklog:' . $sync]);
             }
         }
         if (!empty($env['tasklogfailed'])) {
