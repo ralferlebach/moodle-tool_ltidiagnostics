@@ -19,6 +19,8 @@ process.env.no_proxy = process.env.NO_PROXY;
 module.exports = defineConfig({
   testDir: '.',
   testMatch: /.*\.spec\.js/,
+  // The grade and completion channel suites run on their own stack (playwright.channels.config.js).
+  testIgnore: /(grades|completion)_two_site\.spec\.js/,
   timeout: 240000,
   expect: { timeout: 20000 },
   workers: 1,

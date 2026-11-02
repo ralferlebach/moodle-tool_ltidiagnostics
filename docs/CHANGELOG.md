@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.4.0 - 2026-11-02 (alpha), version 2026110200
+
+Issues #1 to #9 of the development branch. Upgrade step 2026110200 from 0.3.0 (2026102700): three new tables, new
+settings with the grade replay switched off; nothing existing changes.
+
+* **#3 Grade diagnosis (read only).** New tab "Grades (AGS)" per tool side connection: core grade sync prerequisites
+  (auth/enrol LTI, scheduled and ad hoc tasks, task log), per consumer resource link and learner the prediction of
+  core's next run, the source grade, the AGS user id core would send and its source, the last evidence and risks.
+  Findings with severity, certainty, limit and responsible side, among them `gr_lastgrade_blocks` (lastgrade shared by
+  all consumers of a publication), `core_sends_other_subject` (the first consumer's `sourceid` sent to another one),
+  `gr_zero_never_sent`, `gr_no_service`, `gr_no_scope`, `gr_unconfirmed`. Constant query count for 300+ learners.
+* **#4 Grade attempt journal.** Table `tool_ltidiagnostics_gatt`: core's sends imported from the task log of
+  `sync_tool_grades` (bounded, idempotent, classified error classes, exception text never kept) and every state change
+  of an own replay, never mixed. Keyset paging, retention `retentiongradedays`.
+* **#9 Replay security.** Capability `tool/ltidiagnostics:repairgrades` (no archetype), site setting `graderepair`
+  (off), opt-in per connection (audited), sesskey, locks, one open attempt per target, rate limit per operator and
+  hour, batch limit, SSRF guard with address pin and no redirects, endpoint host bound to the issuer or token host,
+  no token, body or subject stored, redacted reason, privacy provider and tool_mergeusers declarations.
+* **#5 Grade replay.** Unchanged grade to exactly one consumer, line item and learner after a dry run and a
+  confirmation; ad hoc task `grade_repair_task`; never a lastgrade reset, never a new line item; AGS score state with a
+  monotonic version and strictly increasing whole-second timestamps (table `tool_ltidiagnostics_gstate`, never a future
+  timestamp); 429/5xx/network errors retried with backoff, 409 never retried with a newer timestamp.
+* **#6 Booking evidence.** AGS result check after a replay and per row (`results_checker`; Moodle's `scoreOf` with
+  `?type_id=` is compared by path); signed grade receipt of the consumer
+  (`receipt.php` on the platform, request/receipt schemas, JWT verified with the platform key set, table
+  `tool_ltidiagnostics_grcpt`).
+* **#7 Completion tab.** Separate tab reading local_lticompletionsync (when installed): sender and receiver classes,
+  revocations, partner status, links to its actions (check partner, retry now, requeue, full reconcile, force resync)
+  with their reach; nothing reimplemented, no grade data used.
+* **#8 UX and support package.** Separate grade and completion workflows with captions, row headers and text badges;
+  support package `ltidiag-support-2` (JSON, Markdown, CSV) split by provider, consumer, both, unknown, without names,
+  user ids, tokens, scores or raw URLs.
+* **#1 CI: no PHP 8.1.** The 4.5 cells of the dev and main matrices run PHP 8.2 (PostgreSQL), the coverage job PHP 8.3;
+  no job or cell uses PHP 8.1 or older. `version.php` and the declared support are unchanged.
+* **#2 CI: no release gate.** Job `maturity-gate` ("Release gate") removed; `ci-complete` aggregates the functional jobs
+  (`test`, `release-artefact`, `coverage`, `stale-files`) directly, each with its own result.
+* **Fixes found by the two-site E2E run.** `results_checker` compared Moodle's `scoreOf` (with `?type_id=`) with the
+  line item URL without its query and reported every real result as a line item mismatch; `package.php` called
+  `send_file()` without `lib/filelib.php` and answered every support package download with an error page (the Behat
+  scenario now downloads and reads it).
+* **Fix found by the load test on 5.2/PostgreSQL.** The latest journal row per link and learner was read with a join on
+  an aggregate; right after a bulk insert (statistics not yet updated) PostgreSQL chose a nested loop that repeated the
+  aggregate and one page of the diagnosis ran for minutes. `journal::latest()` and the lookup of unattributed core
+  sends now read the maximum ids first and then the rows by id (two bounded statements, constant per page).
+* **Tests.** PHPUnit for every class above (grade scenario fixture with a control and a BUW-like consumer and core's real
+  grade sync; load test with 100 000 journal rows and 1 000 mappings), Behat `grades.feature` (5 scenarios), Playwright
+  two-site suites `grades_two_site.spec.js` (11) and `completion_two_site.spec.js` (8) on Moodle 4.5 (tool) and 5.2
+  (platform), stack in `tests/playwright/stack/`. The grade scenario overrides core's `get_mock_launch()` with
+  `willReturnCallback()` (PHPUnit 11 deprecates `will($this->returnCallback())`).
+
 ## 0.3.0 - 2026-10-27 (alpha), version 2026102700
 
 Family audit 2026-10-27 (development branches), items DIA-01 to DIA-05 and GA-03. Replaces the 0.1.0 on the GitHub

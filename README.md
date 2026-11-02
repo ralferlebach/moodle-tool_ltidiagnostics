@@ -8,13 +8,15 @@ specified, implemented, enabled, declared, authorised, reachable and really obse
 what an administrator can do next. A feature is only reported as **verified** when a real transaction was observed.
 An enabled checkbox or a reachable endpoint is never enough.
 
-Status: alpha (0.3.0, version 2026102700). See `docs/ACCEPTANCE.md` for what is proven and what is not.
+Status: alpha (0.4.0, version 2026110200). See `docs/ACCEPTANCE.md` for what is proven and what is not, and
+`docs/GRADES.md` for the grade and completion channels.
 
 
 Requirements
 ------------
 
-This plugin requires Moodle 4.5+ (tested on 4.5 and 5.3) and PHP 8.1+.
+This plugin requires Moodle 4.5+ (tested on 4.5 and 5.3) and PHP 8.1+. The CI matrices test PHP 8.2 to 8.4 (PHP 8.1 is
+no longer part of any CI job; the declared support is unchanged).
 
 
 Motivation for this plugin
@@ -37,6 +39,8 @@ See http://docs.moodle.org/en/Installing_plugins for details on installing Moodl
 
 Notes:
 
+* Upgrading from 0.3.0 runs step 2026110200: three new tables (grade attempt journal, score state, grade receipts) and
+  the grade settings with the replay switched off. Nothing existing is changed.
 * Upgrading from 0.2.x or 0.1.0 runs the upgrade steps up to 2026102700 (two indexes, retention per data class; the
   retention of imported log lines starts with the old common value, nothing is deleted earlier). The GitHub `development`
   branch held 0.1.0 before this release; this release replaces it with a real upgrade path.
@@ -81,11 +85,23 @@ After installing, open *Site administration > Plugins > Admin tools > LTI Diagno
   issuer, client id, deployment, endpoints and signing keys; optional read-only live check of the partner's key set.
 * **Completion sync transfers** (0.3.0). The path of each completion message of local_lticompletionsync on both sites,
   joined by its correlation id after a partner trace exchange; persons are masked.
+* **Grades (AGS)** (0.4.0). Read-only grade diagnosis per consumer: what core's grade sync will do for each resource
+  link and learner, why (for example `lastgrade` shared by several consumers), what is known to have happened (journal
+  of core's sends from the task log and of own replays) and who is responsible. Optional **grade replay** of an
+  unchanged grade to exactly one consumer, line item and learner: off by default, needs the site setting, the opt-in
+  of the connection and `tool/ltidiagnostics:repairgrades`, a dry run and a confirmation. Booking evidence through the
+  AGS result service or a signed receipt of the consumer. See `docs/GRADES.md`.
+* **Completion sync** (0.4.0). Separate tab with the outbox and receiver states of local_lticompletionsync (pending,
+  sent tool-only, retry, acknowledged, applied with signed acknowledgement, rejected, blocked, dead, revoked, unknown)
+  and links to that plugin's own actions with their real reach.
+* **Support package** (0.4.0). Redacted JSON, Markdown or CSV for the partner's administration, split into provider,
+  consumer, both and unknown.
 
 Settings (*Site administration > Plugins > Admin tools > LTI Diagnostics > Settings*): record events, retention days,
 log allow-list, maximum lines per import, active checks (off by default), allow private targets (off by default),
 exactly allowed private targets, log imports per person and hour, retention of imported lines, audit, snapshots and
-partner data, maximum minutes of the diagnostic mode.
+partner data, maximum minutes of the diagnostic mode; grade replay (off by default), result check after a replay,
+batch size, replays per person and hour, attempts, retry delay, retention of the grade journal.
 
 
 Capabilities
@@ -102,6 +118,9 @@ This plugin introduces these capabilities (none is granted by default except `vi
 * **tool/ltidiagnostics:runprivatechecks** - Additionally required when private target addresses are allowed in the settings (administrators only by default, every run is audited).
 * **tool/ltidiagnostics:importlogs** - Import web server logs.
 * **tool/ltidiagnostics:export** - Export reports.
+* **tool/ltidiagnostics:viewgrades** - See score values in the grade diagnosis (0.4.0; risk: personal).
+* **tool/ltidiagnostics:repairgrades** - Replay a grade to a consumer (0.4.0; risks: personal, config, data loss; needs the
+  site setting and the opt-in of the connection as well).
 
 Site administrators have all of them through the normal Moodle rules.
 
@@ -111,7 +130,10 @@ Scheduled Tasks
 
 * **\tool_ltidiagnostics\task\cleanup_task** - Deletes recorded observations, imported log lines, snapshots, imported
   partner data and audit entries older than their retention times and ends an expired diagnostic mode. Enabled by
-  default, runs daily at 03:17.
+  default, runs daily at 03:17. Since 0.4.0 it also imports core's grade sync task log into the grade journal
+  (bounded per run) and applies the grade journal retention.
+* **\tool_ltidiagnostics\task\grade_repair_task** (ad hoc, 0.4.0) - Sends one queued grade replay; never throws, an
+  unexpected error ends the attempt as aborted.
 
 
 How this plugin works / Pitfalls
@@ -121,8 +143,9 @@ How this plugin works / Pitfalls
   the LTI inventory tables and the Moodle curl wrapper. It does not patch core and does not need a fork.
 * Moodle offers no hook for the OIDC login, the JWT validation or the AGS/NRPS service calls. Those steps are shown as
   `not_observable` unless the web server access log is imported. This is a limit of Moodle, not a bug (docs/DOCUMENTATION.md, gates).
-* A tool-side AGS or NRPS feature can never become `verified` in 0.3.0, because the authorised test call that would prove
-  it is not implemented; the platform's gradebook is the partner's, so the tool reports the score as "booked at the partner".
+* In the capability matrix a tool-side AGS or NRPS feature does not become `verified`, because the authorised test call
+  that would prove it is not implemented. The Grades tab (0.4.0) shows the booking of a grade only with the consumer's AGS
+  result or a signed receipt; an HTTP success alone is "accepted, booking unknown".
 * What happens on the partner site is visible only through the partner package and the partner trace, which the other
   administrator has to export. Without them reports say "limited".
 * The observer records the event type, the entry point, a trace ID, ids of course/activity/user and a time. It never

@@ -99,20 +99,20 @@ final class upgrade_test extends \advanced_testcase {
     }
 
     /**
-     * Release metadata says 0.3.0 and the Moodle version is newer than the 0.1.0 build.
+     * Release metadata says 0.4.0 and the Moodle version is newer than the 0.1.0 build.
      */
     public function test_version_metadata(): void {
         global $CFG;
         $plugin = new \stdClass();
         require($CFG->dirroot . '/admin/tool/ltidiagnostics/version.php');
-        $this->assertSame('0.3.0', $plugin->release);
+        $this->assertSame('0.4.0', $plugin->release);
         $this->assertSame('tool_ltidiagnostics', $plugin->component);
         $this->assertGreaterThan(self::V010, $plugin->version);
-        $this->assertSame(2026102700, $plugin->version);
+        $this->assertSame(2026110200, $plugin->version);
         $this->assertSame(MATURITY_ALPHA, $plugin->maturity);
         $this->assertSame([405, 503], $plugin->supported);
         $info = \core_plugin_manager::instance()->get_plugin_info('tool_ltidiagnostics');
-        $this->assertSame('0.3.0', $info->release);
+        $this->assertSame('0.4.0', $info->release);
     }
 
     /**
@@ -210,7 +210,7 @@ final class upgrade_test extends \advanced_testcase {
         $this->become_010();
         set_config('allowprivatetargets', 1, 'tool_ltidiagnostics');
         set_config('retentiondays', 0, 'tool_ltidiagnostics');
-        $this->assertTrue($this->upgrade(2026102700));
+        $this->assertTrue($this->upgrade(2026110200));
         $this->assertSame(0, $DB->count_records('tool_ltidiagnostics_audit', ['action' => 'upgrade_allowprivate']));
         $this->assertSame('0', get_config('tool_ltidiagnostics', 'retentiondays'));
     }
@@ -355,6 +355,53 @@ final class upgrade_test extends \advanced_testcase {
             if (!$dbman->index_exists($imp, $impindex)) {
                 $dbman->add_index($imp, $impindex);
             }
+        }
+    }
+
+    /**
+     * Step 2026110200 (release 0.4.0, grade channel): the three grade tables are created, the replay starts switched off,
+     * existing settings and data are kept, and a second run changes nothing.
+     */
+    public function test_upgrade_from_030(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $dbman = $DB->get_manager();
+        $ids = $this->seed_010_data();
+        $tables = ['tool_ltidiagnostics_gatt', 'tool_ltidiagnostics_gstate', 'tool_ltidiagnostics_grcpt'];
+        foreach ($tables as $name) {
+            $dbman->drop_table(new \xmldb_table($name));
+        }
+        foreach (array_keys(\tool_ltidiagnostics\local\config::DEFAULTS) as $name) {
+            if (
+                in_array($name, ['graderepair', 'graderepairconnections', 'repairbatchmax', 'repairratelimit',
+                    'repairmaxattempts', 'repairbackoff', 'repairresultcheck', 'retentiongradedays'], true)
+            ) {
+                unset_config($name, 'tool_ltidiagnostics');
+            }
+        }
+        set_config('repairbatchmax', 5, 'tool_ltidiagnostics');
+        try {
+            $this->become_010();
+            set_config('version', 2026102700, 'tool_ltidiagnostics');
+            $this->assertTrue($this->upgrade(2026102700));
+            foreach ($tables as $name) {
+                $this->assertTrue($dbman->table_exists($name), $name);
+            }
+            $this->assertSame('0', get_config('tool_ltidiagnostics', 'graderepair'), 'The replay starts switched off.');
+            $this->assertSame('', get_config('tool_ltidiagnostics', 'graderepairconnections'));
+            $this->assertSame('5', get_config('tool_ltidiagnostics', 'repairbatchmax'), 'An existing setting is kept.');
+            $this->assertSame('365', get_config('tool_ltidiagnostics', 'retentiongradedays'));
+            foreach ($ids as $table => $id) {
+                $this->assertTrue($DB->record_exists($table, ['id' => $id]), $table);
+            }
+            \tool_ltidiagnostics\local\grades\journal::insert(['connkey' => 'tool:1:1', 'state' => 'queued']);
+            set_config('graderepair', 1, 'tool_ltidiagnostics');
+            set_config('version', 2026102700, 'tool_ltidiagnostics');
+            $this->assertTrue($this->upgrade(2026102700), 'second run');
+            $this->assertSame('1', get_config('tool_ltidiagnostics', 'graderepair'), 'The second run changes nothing.');
+            $this->assertSame(1, $DB->count_records('tool_ltidiagnostics_gatt'));
+        } finally {
+            tool_ltidiagnostics_create_missing_tables($dbman);
         }
     }
 }

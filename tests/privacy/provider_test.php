@@ -82,7 +82,8 @@ final class provider_test extends provider_testcase {
         }, $items);
         $this->assertEqualsCanonicalizing([
             'tool_ltidiagnostics_obs', 'tool_ltidiagnostics_audit', 'tool_ltidiagnostics_snap', 'tool_ltidiagnostics_imp',
-            'tool_ltidiagnostics_profile', 'tool_ltidiagnostics_acc',
+            'tool_ltidiagnostics_profile', 'tool_ltidiagnostics_acc', 'tool_ltidiagnostics_gatt',
+            'tool_ltidiagnostics_gstate', 'tool_ltidiagnostics_grcpt', 'lti_ags_consumer',
         ], $tables);
         $sm = get_string_manager();
         foreach ($items as $item) {
@@ -99,7 +100,8 @@ final class provider_test extends provider_testcase {
     public function test_all_tables_with_user_columns_are_described(): void {
         global $DB;
         $described = ['tool_ltidiagnostics_obs', 'tool_ltidiagnostics_audit', 'tool_ltidiagnostics_snap',
-            'tool_ltidiagnostics_imp', 'tool_ltidiagnostics_profile', 'tool_ltidiagnostics_acc'];
+            'tool_ltidiagnostics_imp', 'tool_ltidiagnostics_profile', 'tool_ltidiagnostics_acc', 'tool_ltidiagnostics_gatt',
+            'tool_ltidiagnostics_gstate', 'tool_ltidiagnostics_grcpt'];
         $xmldb = new \xmldb_file(__DIR__ . '/../../db/install.xml');
         $xmldb->loadXMLStructure();
         $tables = array_map(function ($t) {

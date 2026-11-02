@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="admin/tool/ltidiagnostics/db" VERSION="2026102700" COMMENT="XMLDB file for Moodle admin/tool/ltidiagnostics"
+<XMLDB PATH="admin/tool/ltidiagnostics/db" VERSION="2026110200" COMMENT="XMLDB file for Moodle admin/tool/ltidiagnostics"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="../../../../lib/xmldb/xmldb.xsd"
 >
@@ -142,6 +142,101 @@
         <INDEX NAME="requestid" UNIQUE="false" FIELDS="requestid"/>
         <INDEX NAME="importid" UNIQUE="false" FIELDS="importid"/>
         <INDEX NAME="category_time" UNIQUE="false" FIELDS="category, logtime" COMMENT="Bounded queries per category and time window"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="tool_ltidiagnostics_gatt" COMMENT="Grade attempt journal: passive core sends from the task log and fully instrumented grade replays (no tokens, no bodies, no names)">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false" COMMENT="Unique id of this attempt"/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Shared by an attempt and its retries"/>
+        <FIELD NAME="parentid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Journal row this attempt retries, 0 for a first attempt"/>
+        <FIELD NAME="attemptno" TYPE="int" LENGTH="5" NOTNULL="true" DEFAULT="1" SEQUENCE="false"/>
+        <FIELD NAME="origin" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="core_task, replay, replay_batch or replay_retry"/>
+        <FIELD NAME="source" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="task_log (passive) or instrumented (own replay)"/>
+        <FIELD NAME="sourcekey" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Idempotency key (task log line or attempt id)"/>
+        <FIELD NAME="connkey" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="deploymentrowid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="resourcelinkrowid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="enrol_lti_resource_link.id, 0 when the task log did not name one"/>
+        <FIELD NAME="toolid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="enrol_lti_tools.id"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Local learner (shown pseudonymised)"/>
+        <FIELD NAME="subjecthash" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="sha256 of issuer and LTI subject used as AGS userId"/>
+        <FIELD NAME="lineitemhash" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="sha256 of the line item URL"/>
+        <FIELD NAME="scoregiven" TYPE="number" LENGTH="15" NOTNULL="false" SEQUENCE="false" DECIMALS="5"/>
+        <FIELD NAME="scoremax" TYPE="number" LENGTH="15" NOTNULL="false" SEQUENCE="false" DECIMALS="5"/>
+        <FIELD NAME="sourceversion" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Fingerprint of the source grade at preview time"/>
+        <FIELD NAME="gradetime" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Original date graded, never changed"/>
+        <FIELD NAME="agstimestamp" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Score.timestamp sent (re-issue time of the score state update)"/>
+        <FIELD NAME="stateversion" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Monotonic score state version of the target"/>
+        <FIELD NAME="state" TYPE="char" LENGTH="30" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="skipreason" TYPE="char" LENGTH="30" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="httpstatus" TYPE="int" LENGTH="5" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="tokenstatus" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="none, granted, refused, scope_missing"/>
+        <FIELD NAME="errorclass" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="retryat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="evidence" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="task_log or instrumented"/>
+        <FIELD NAME="bookingstate" TYPE="char" LENGTH="30" NOTNULL="true" SEQUENCE="false" COMMENT="unknown, unobservable, results_match, results_mismatch, receipt_confirmed, receipt_mismatch"/>
+        <FIELD NAME="bookingdetail" TYPE="char" LENGTH="100" NOTNULL="true" SEQUENCE="false" COMMENT="Comma separated mismatch codes"/>
+        <FIELD NAME="bookingcheckedat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="operatorid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who requested a replay, 0 for core"/>
+        <FIELD NAME="purpose" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Reason given by the operator"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid" UNIQUE="true" FIELDS="attemptid"/>
+        <INDEX NAME="sourcekey" UNIQUE="true" FIELDS="sourcekey"/>
+        <INDEX NAME="connkey_time" UNIQUE="false" FIELDS="connkey, timecreated"/>
+        <INDEX NAME="link_user_time" UNIQUE="false" FIELDS="resourcelinkrowid, userid, timecreated"/>
+        <INDEX NAME="correlationid" UNIQUE="false" FIELDS="correlationid"/>
+        <INDEX NAME="state_retry" UNIQUE="false" FIELDS="state, retryat"/>
+        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="operatorid" UNIQUE="false" FIELDS="operatorid"/>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="tool_ltidiagnostics_gstate" COMMENT="Score state per replay target: monotonic version and last issued AGS timestamp">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="targethash" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="sha256 of line item URL and subject"/>
+        <FIELD NAME="version" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="lastissued" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="lastattemptid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="targethash" UNIQUE="true" FIELDS="targethash"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="tool_ltidiagnostics_grcpt" COMMENT="Grade receipts imported from the partner site (consumer gradebook evidence, codes and values only)">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="receipthash" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="sha256 of the receipt document (idempotency)"/>
+        <FIELD NAME="verdict" TYPE="char" LENGTH="30" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="mismatches" TYPE="char" LENGTH="100" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="scoregiven" TYPE="number" LENGTH="15" NOTNULL="false" SEQUENCE="false" DECIMALS="5"/>
+        <FIELD NAME="scoremax" TYPE="number" LENGTH="15" NOTNULL="false" SEQUENCE="false" DECIMALS="5"/>
+        <FIELD NAME="gradetime" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="locked" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="overridden" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="issuedat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="When the partner created the receipt"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who imported it"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="receipthash" UNIQUE="true" FIELDS="receipthash"/>
+        <INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/>
+        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
       </INDEXES>
     </TABLE>
   </TABLES>

@@ -37,7 +37,7 @@ use tool_ltidiagnostics\local\timeline;
 
 $key = required_param('key', PARAM_RAW);
 $tab = optional_param('tab', 'matrix', PARAM_ALPHA);
-$tabs = ['matrix', 'health', 'messages', 'timeline', 'evidence', 'history'];
+$tabs = ['matrix', 'grades', 'completion', 'health', 'messages', 'timeline', 'evidence', 'history'];
 if (!in_array($tab, $tabs, true)) {
     $tab = 'matrix';
 }
@@ -143,6 +143,54 @@ if ($tab === 'matrix') {
     $matrix = (new \tool_ltidiagnostics\local\matrix_builder())->build($conn, $facts, $storedprobes);
     echo $output->matrix($matrix);
     echo html_writer::tag('p', get_string('matrix_limits', 'tool_ltidiagnostics'), ['class' => 'text-muted']);
+} else if ($tab === 'grades') {
+    // Grade channel (issues #3 to #6, #8): diagnosis, attempt journal, replay module.
+    $gout = $PAGE->get_renderer('tool_ltidiagnostics', 'grades');
+    $gradesurl = new moodle_url($pageurl, array_filter($filters));
+    if ($conn->role === connection::ROLE_TOOL) {
+        $showscores = has_capability('tool/ltidiagnostics:viewgrades', $context);
+        $diag = (new \tool_ltidiagnostics\local\grades\grade_diagnosis())->run($conn, [
+            'offset' => optional_param('offset', 0, PARAM_INT),
+            'reveal' => $reveal,
+            'showscores' => $showscores,
+            'now' => $now,
+        ]);
+        $journal = \tool_ltidiagnostics\local\grades\journal::page($key, ['before' => optional_param('before', 0, PARAM_INT),
+            'limit' => 50]);
+        $repairstate = [
+            'site' => \tool_ltidiagnostics\local\grades\repair_service::site_enabled(),
+            'optin' => in_array($key, \tool_ltidiagnostics\local\grades\repair_service::opted_in(), true),
+            'capability' => has_capability('tool/ltidiagnostics:repairgrades', $context),
+        ];
+        echo $gout->grades_tab($diag, $journal, [
+            'key' => $key,
+            'pageurl' => $gradesurl,
+            'showscores' => $showscores,
+            'canrepair' => \tool_ltidiagnostics\local\grades\repair_service::can_repair($key),
+            'canresult' => has_capability('tool/ltidiagnostics:runchecks', $context),
+            'canoptin' => $repairstate['site'] && $repairstate['capability']
+                && has_capability('tool/ltidiagnostics:configure', $context),
+            'repairstate' => $repairstate,
+        ]);
+    } else {
+        echo html_writer::tag('p', get_string('grades_consumer', 'tool_ltidiagnostics'), ['class' => 'lead']);
+        if (has_capability('tool/ltidiagnostics:export', $context)) {
+            echo html_writer::link(
+                new moodle_url('/admin/tool/ltidiagnostics/receipt.php', ['key' => $key]),
+                get_string('greceipt_answer_title', 'tool_ltidiagnostics'),
+                ['class' => 'btn btn-secondary',
+                'id' => 'tool_ltidiagnostics_receiptlink']
+            );
+        }
+    }
+} else if ($tab === 'completion') {
+    // Completion channel (issue #7): read only, actions stay in local_lticompletionsync.
+    $gout = $PAGE->get_renderer('tool_ltidiagnostics', 'grades');
+    $view = (new \tool_ltidiagnostics\local\completion\completion_view())->build(
+        $conn,
+        ['offset' => optional_param('offset', 0, PARAM_INT)]
+    );
+    echo $gout->completion_tab($view, $pageurl);
 } else if ($tab === 'health') {
     $result = (new health_check())->run($conn, $now, ['profile' => $profile, 'probes' => $storedprobes, 'filters' => $filters]);
     if (has_capability('tool/ltidiagnostics:runchecks', $context) && \tool_ltidiagnostics\local\config::get('activechecks')) {
@@ -197,6 +245,18 @@ if (has_capability('tool/ltidiagnostics:export', $context)) {
     foreach (\tool_ltidiagnostics\local\report_exporter::FORMATS as $format) {
         echo html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/export.php', $exportbase + ['format' => $format] +
             array_filter($filters)), get_string('export_' . $format, 'tool_ltidiagnostics'), ['class' => 'btn btn-secondary mr-2']);
+    }
+    if ($tab === 'grades' || $tab === 'completion') {
+        echo $output->heading(get_string('gpkg_export', 'tool_ltidiagnostics'), 4);
+        echo html_writer::tag('p', get_string('gpkg_export_desc', 'tool_ltidiagnostics'), ['class' => 'small text-muted']);
+        foreach (\tool_ltidiagnostics\local\grades\support_package::FORMATS as $format) {
+            echo html_writer::link(
+                new moodle_url('/admin/tool/ltidiagnostics/package.php', $exportbase + ['format' => $format]),
+                get_string('gpkg_export_' . $format, 'tool_ltidiagnostics'),
+                ['class' => 'btn btn-secondary mr-2 me-2',
+                'id' => 'tool_ltidiagnostics_pkg_' . $format]
+            );
+        }
     }
 }
 echo $output->footer();

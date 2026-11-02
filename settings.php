@@ -140,6 +140,39 @@ if (
             240,
             PARAM_INT
         ));
+        // Grade channel (0.4.0). The active grade replay is a separate, switched off module: this setting, the opt-in
+        // of each connection and the capability tool/ltidiagnostics:repairgrades are all needed.
+        $settings->add(new admin_setting_heading(
+            'tool_ltidiagnostics/gradeheading',
+            get_string('setting_gradeheading', 'tool_ltidiagnostics'),
+            get_string('setting_gradeheading_desc', 'tool_ltidiagnostics')
+        ));
+        $settings->add(new admin_setting_configcheckbox(
+            'tool_ltidiagnostics/graderepair',
+            get_string('setting_graderepair', 'tool_ltidiagnostics'),
+            get_string('setting_graderepair_desc', 'tool_ltidiagnostics'),
+            0
+        ));
+        $settings->add(new admin_setting_configcheckbox(
+            'tool_ltidiagnostics/repairresultcheck',
+            get_string('setting_repairresultcheck', 'tool_ltidiagnostics'),
+            get_string('setting_repairresultcheck_desc', 'tool_ltidiagnostics'),
+            1
+        ));
+        foreach (
+            ['repairbatchmax' => [20, 1, 100], 'repairratelimit' => [30, 1, 500], 'repairmaxattempts' => [4, 1, 10],
+                'repairbackoff' => [300, 30, 86400], 'retentiongradedays' => [365, 1, 3650]] as $name => [$default, $min, $max]
+        ) {
+            $settings->add(new admin_setting_configtext_with_maxlength(
+                'tool_ltidiagnostics/' . $name,
+                get_string('setting_' . $name, 'tool_ltidiagnostics'),
+                get_string('setting_' . $name . '_desc', 'tool_ltidiagnostics', (object) ['min' => $min, 'max' => $max]),
+                $default,
+                PARAM_INT,
+                null,
+                6
+            ));
+        }
     }
     $ADMIN->add('tool_ltidiagnostics_category', $settings);
 }

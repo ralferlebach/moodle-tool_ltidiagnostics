@@ -222,7 +222,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_405_STABLE, php: '8.2', database: pgsql, pg: '16', maria: '10.11' }
           - { moodle: MOODLE_500_STABLE, php: '8.2', database: mariadb, pg: '16', maria: '10.11' }
           - { moodle: MOODLE_503_STABLE, php: '8.3', database: pgsql, pg: '17', maria: '11.4' }
           - { moodle: MOODLE_503_STABLE, php: '8.4', database: mariadb, pg: '17', maria: '11.4' }

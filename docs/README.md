@@ -3,6 +3,7 @@
 | Document | Content |
 |----------|---------|
 | DOCUMENTATION.md | Architecture, feasibility gates with evidence, configuration |
+| GRADES.md | Grade and completion channels (0.4.0): diagnosis, journal, replay, booking evidence, threat model, rollback |
 | ACCEPTANCE.md | Acceptance criteria with status class and evidence test, runner results |
 | TESTING.md | How to run every test layer, test matrix |
 | SECURITY.md | Threat model and the measures taken |

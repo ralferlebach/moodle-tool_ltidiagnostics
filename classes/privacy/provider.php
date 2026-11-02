@@ -30,6 +30,9 @@ use core_privacy\local\request\writer;
  * Personal data: observations (a user id per recorded LTI event), the audit log of who viewed or exported
  * diagnostics, snapshot and import authorship, and the author of desired-state profiles.
  * Deleting a user removes their observations and audit entries and unlinks authorship from the rest.
+ * Grade channel (0.4.0): the grade attempt journal holds the learner (user id, score, subject hash) and the operator of a
+ * replay; partner receipts hold the importer. A replay sends the learner's LTI subject and score to the consumer (external
+ * location). Deleting a learner removes their journal rows and receipts; deleting an operator detaches them.
  *
  * @package    tool_ltidiagnostics
  * @copyright  2026 Ralf Erlebach
@@ -77,6 +80,31 @@ class provider implements
             'path' => 'privacy:metadata:acc:path',
             'logtime' => 'privacy:metadata:acc:logtime',
         ], 'privacy:metadata:acc');
+        $collection->add_database_table('tool_ltidiagnostics_gatt', [
+            'userid' => 'privacy:metadata:gatt:userid',
+            'subjecthash' => 'privacy:metadata:gatt:subjecthash',
+            'scoregiven' => 'privacy:metadata:gatt:scoregiven',
+            'scoremax' => 'privacy:metadata:gatt:scoremax',
+            'state' => 'privacy:metadata:gatt:state',
+            'operatorid' => 'privacy:metadata:gatt:operatorid',
+            'purpose' => 'privacy:metadata:gatt:purpose',
+            'timecreated' => 'privacy:metadata:gatt:timecreated',
+        ], 'privacy:metadata:gatt');
+        $collection->add_database_table('tool_ltidiagnostics_gstate', [
+            'targethash' => 'privacy:metadata:gstate:targethash',
+            'lastissued' => 'privacy:metadata:gstate:lastissued',
+        ], 'privacy:metadata:gstate');
+        $collection->add_database_table('tool_ltidiagnostics_grcpt', [
+            'userid' => 'privacy:metadata:grcpt:userid',
+            'scoregiven' => 'privacy:metadata:grcpt:scoregiven',
+            'timecreated' => 'privacy:metadata:grcpt:timecreated',
+        ], 'privacy:metadata:grcpt');
+        $collection->add_external_location_link('lti_ags_consumer', [
+            'userid' => 'privacy:metadata:agsconsumer:userid',
+            'scoregiven' => 'privacy:metadata:agsconsumer:scoregiven',
+            'scoremaximum' => 'privacy:metadata:agsconsumer:scoremaximum',
+            'timestamp' => 'privacy:metadata:agsconsumer:timestamp',
+        ], 'privacy:metadata:agsconsumer');
         return $collection;
     }
 
@@ -95,7 +123,9 @@ class provider implements
                    AND (EXISTS (SELECT 1 FROM {tool_ltidiagnostics_audit} a WHERE a.userid = :userid2)
                      OR EXISTS (SELECT 1 FROM {tool_ltidiagnostics_snap} s WHERE s.userid = :userid3)
                      OR EXISTS (SELECT 1 FROM {tool_ltidiagnostics_imp} i WHERE i.userid = :userid4)
-                     OR EXISTS (SELECT 1 FROM {tool_ltidiagnostics_profile} p WHERE p.usermodified = :userid5))
+                     OR EXISTS (SELECT 1 FROM {tool_ltidiagnostics_profile} p WHERE p.usermodified = :userid5)
+                     OR EXISTS (SELECT 1 FROM {tool_ltidiagnostics_gatt} g WHERE g.userid = :userid8 OR g.operatorid = :userid9)
+                     OR EXISTS (SELECT 1 FROM {tool_ltidiagnostics_grcpt} r WHERE r.userid = :userid10))
                 UNION
                 SELECT ctx.id
                   FROM {context} ctx
@@ -103,7 +133,7 @@ class provider implements
                  WHERE ob.userid = :userid7";
         $contextlist->add_from_sql($sql, ['systemid' => $system,
             'userid2' => $userid, 'userid3' => $userid, 'userid4' => $userid, 'userid5' => $userid,
-            'userid7' => $userid]);
+            'userid7' => $userid, 'userid8' => $userid, 'userid9' => $userid, 'userid10' => $userid]);
         return $contextlist;
     }
 
@@ -128,6 +158,13 @@ class provider implements
                 'SELECT usermodified FROM {tool_ltidiagnostics_profile} WHERE usermodified <> 0',
                 []
             );
+            $userlist->add_from_sql('userid', 'SELECT userid FROM {tool_ltidiagnostics_gatt} WHERE userid <> 0', []);
+            $userlist->add_from_sql(
+                'operatorid',
+                'SELECT operatorid FROM {tool_ltidiagnostics_gatt} WHERE operatorid <> 0',
+                []
+            );
+            $userlist->add_from_sql('userid', 'SELECT userid FROM {tool_ltidiagnostics_grcpt} WHERE userid <> 0', []);
         }
     }
 
@@ -167,6 +204,34 @@ class provider implements
                 'imports' => $DB->count_records('tool_ltidiagnostics_imp', ['userid' => $userid]),
                 'profiles' => $DB->count_records('tool_ltidiagnostics_profile', ['usermodified' => $userid]),
             ];
+            $grades = $DB->get_records('tool_ltidiagnostics_gatt', ['userid' => $userid], 'timecreated', 'id, attemptid,
+                origin, state, scoregiven, scoremax, httpstatus, errorclass, bookingstate, agstimestamp, timecreated');
+            if ($grades) {
+                writer::with_context($context)->export_data(array_merge($subcontext, ['gradeattempts']), (object) [
+                    'gradeattempts' => array_values(array_map(function ($r) {
+                        return ['attempt' => $r->attemptid, 'origin' => $r->origin, 'state' => $r->state,
+                            'score' => $r->scoregiven, 'maximum' => $r->scoremax, 'httpstatus' => $r->httpstatus,
+                            'errorclass' => $r->errorclass, 'booking' => $r->bookingstate,
+                            'agstimestamp' => $r->agstimestamp ? transform::datetime($r->agstimestamp) : '',
+                            'time' => transform::datetime($r->timecreated)];
+                    }, $grades)),
+                ]);
+            }
+            $operated = $DB->get_records(
+                'tool_ltidiagnostics_gatt',
+                ['operatorid' => $userid],
+                'timecreated',
+                'id, attemptid, connkey, purpose, state, timecreated'
+            );
+            if ($operated) {
+                writer::with_context($context)->export_data(array_merge($subcontext, ['gradereplays']), (object) [
+                    'gradereplays' => array_values(array_map(function ($r) {
+                        return ['attempt' => $r->attemptid, 'connection' => $r->connkey, 'purpose' => $r->purpose,
+                            'state' => $r->state, 'time' => transform::datetime($r->timecreated)];
+                    }, $operated)),
+                ]);
+            }
+            $authored['gradereceipts'] = $DB->count_records('tool_ltidiagnostics_grcpt', ['userid' => $userid]);
             if (array_sum($authored)) {
                 writer::with_context($context)->export_data(array_merge($subcontext, ['authorship']), (object) $authored);
             }
@@ -186,6 +251,9 @@ class provider implements
             $DB->set_field('tool_ltidiagnostics_snap', 'userid', 0);
             $DB->set_field('tool_ltidiagnostics_imp', 'userid', 0);
             $DB->set_field('tool_ltidiagnostics_profile', 'usermodified', 0);
+            $DB->delete_records('tool_ltidiagnostics_gatt');
+            $DB->delete_records('tool_ltidiagnostics_gstate');
+            $DB->delete_records('tool_ltidiagnostics_grcpt');
         }
     }
 
@@ -237,5 +305,17 @@ class provider implements
         $DB->set_field('tool_ltidiagnostics_snap', 'userid', 0, ['userid' => $userid]);
         $DB->set_field('tool_ltidiagnostics_imp', 'userid', 0, ['userid' => $userid]);
         $DB->set_field('tool_ltidiagnostics_profile', 'usermodified', 0, ['usermodified' => $userid]);
+        // Learner: the attempts about them and the receipts of those attempts go. Operator: detached, reason removed.
+        $attempts = $DB->get_fieldset_select('tool_ltidiagnostics_gatt', 'attemptid', 'userid = :u', ['u' => $userid]);
+        foreach (array_chunk($attempts, 500) as $chunk) {
+            [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED);
+            $DB->delete_records_select('tool_ltidiagnostics_grcpt', "attemptid $insql", $params);
+        }
+        $DB->delete_records('tool_ltidiagnostics_gatt', ['userid' => $userid]);
+        $DB->execute(
+            "UPDATE {tool_ltidiagnostics_gatt} SET operatorid = 0, purpose = :p WHERE operatorid = :u",
+            ['p' => '', 'u' => $userid]
+        );
+        $DB->set_field('tool_ltidiagnostics_grcpt', 'userid', 0, ['userid' => $userid]);
     }
 }

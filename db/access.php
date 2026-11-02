@@ -85,6 +85,20 @@ $capabilities = [
         'riskbitmask' => RISK_PERSONAL | RISK_CONFIG,
         'archetypes' => [],
     ],
+    // Score values in the grade channel (without it: only "no grade", "zero", "value").
+    'tool/ltidiagnostics:viewgrades' => [
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_PERSONAL,
+        'archetypes' => [],
+    ],
+    // Active grade replay to one consumer (needs the site setting and the opt-in of the connection as well).
+    'tool/ltidiagnostics:repairgrades' => [
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_PERSONAL | RISK_CONFIG | RISK_DATALOSS,
+        'archetypes' => [],
+    ],
     // Export of diagnostic reports.
     'tool/ltidiagnostics:export' => [
         'captype' => 'read',

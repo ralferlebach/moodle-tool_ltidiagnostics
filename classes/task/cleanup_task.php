@@ -62,7 +62,15 @@ class cleanup_task extends \core\task\scheduled_task {
         );
         $DB->delete_records_select('tool_ltidiagnostics_snap', 'timecreated < ?', [$now - $days('retentionsnapdays') * DAYSECS]);
         $DB->delete_records_select('tool_ltidiagnostics_audit', 'timecreated < ?', [$now - $days('retentionauditdays') * DAYSECS]);
+        // Grade channel (0.4.0): attempt journal, partner receipts and score states share "retentiongradedays". Open
+        // attempts are never removed; the passive task log import continues from its cursor.
+        $gradecut = $now - config::bounded('retentiongradedays') * DAYSECS;
+        $grades = \tool_ltidiagnostics\local\grades\journal::purge($gradecut);
+        $DB->delete_records_select('tool_ltidiagnostics_grcpt', 'timecreated < ?', [$gradecut]);
+        $DB->delete_records_select('tool_ltidiagnostics_gstate', 'timemodified < ?', [$gradecut]);
+        $imported = (new \tool_ltidiagnostics\local\grades\tasklog_importer())->import();
         diagnostic_mode::expire();
-        mtrace("tool_ltidiagnostics: removed $deleted observations and $lines imported log lines past their retention.");
+        mtrace("tool_ltidiagnostics: removed $deleted observations, $lines imported log lines and $grades grade journal rows " .
+            "past their retention; imported {$imported['rows']} grade task outcomes from {$imported['runs']} task runs.");
     }
 }

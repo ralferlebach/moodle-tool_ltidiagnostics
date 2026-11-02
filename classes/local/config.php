@@ -45,6 +45,24 @@ class config {
         'retentionpartnerdays' => 30,
         'importratelimit' => 10,
         'privatetargetallowlist' => '',
+        // Since 0.4.0: grade channel. The active grade replay is off by default and needs an opt-in per connection.
+        'graderepair' => 0,
+        'graderepairconnections' => '',
+        'repairbatchmax' => 20,
+        'repairratelimit' => 30,
+        'repairmaxattempts' => 4,
+        'repairbackoff' => 300,
+        'repairresultcheck' => 1,
+        'retentiongradedays' => 365,
+    ];
+
+    /** @var array Bounds of numeric grade channel settings: name => [min, max]. */
+    public const BOUNDS = [
+        'repairbatchmax' => [1, 100],
+        'repairratelimit' => [1, 500],
+        'repairmaxattempts' => [1, 10],
+        'repairbackoff' => [30, 86400],
+        'retentiongradedays' => [1, 3650],
     ];
 
     /**
@@ -59,6 +77,17 @@ class config {
             return self::DEFAULTS[$name] ?? null;
         }
         return is_numeric(self::DEFAULTS[$name] ?? null) ? (int) $value : $value;
+    }
+
+    /**
+     * Numeric setting clamped to its bounds (a mistyped value can never mean "unlimited").
+     *
+     * @param string $name Setting name (key of BOUNDS).
+     * @return int
+     */
+    public static function bounded(string $name): int {
+        [$min, $max] = self::BOUNDS[$name];
+        return max($min, min($max, (int) self::get($name)));
     }
 
     /**

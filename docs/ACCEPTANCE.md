@@ -4,6 +4,106 @@ Status classes (COMMON brief): **CP** code present / **TL** tests executed local
 accepted / **NV** not verified. Nothing is marked CI or FA yet: no CI run happened, and the owner has not accepted anything.
 "TL" means the named test passed on all four tree/database combinations listed below unless stated otherwise.
 
+## Release 0.4.0 / 2026110200 (issues #1 to #9, 2026-11-02)
+
+Evidence classes as above. **TL** here means: executed on this machine in the cells named in "Local runner results
+0.4.0". Nothing is **CI** (no GitHub run by us) or **FA** (owner acceptance pending). The E2E suites run on two real
+sites (Moodle 4.5 tool, Moodle 5.2 platform) with real HTTP between them; what is set up through APIs is listed in
+`tests/playwright/stack/README.md`.
+
+### Per issue: acceptance criteria (AK) and definition of done (DoD)
+
+| Issue | AK / DoD item | Status | Evidence |
+|---|---|---|---|
+| #3 | Same provider user at two consumers shown strictly separately | TL | `grade_diagnosis_test::test_two_consumers_are_separate_and_lastgrade_is_a_risk`; E2E `grades_two_site` #3 (Control and BUW tabs) |
+| #3 | Global lastgrade and possible blocking marked as a risk, never as delivery proof | TL | finding `gr_lastgrade_blocks`, risk `lastgrade_shared`; E2E reproduces the real core skip ("grades are the same") at BUW |
+| #3 | Missing vs 0 points, course vs activity grade, completion gating separate | TL | `test_missing_zero_gating_and_kinds`; `gr_zero_never_sent` |
+| #3 | Scheduled and ad hoc task status, skip/failure reasons with date and evidence quality | TL | prerequisites table, `test_task_chain_and_prerequisites`; journal from the real task log (E2E) |
+| #3 | Every finding names source, time, certainty and limit of observability | TL | `test_observations_are_complete` |
+| #3 | No N+1, role-bound view, sensitive values redacted | TL | `test_query_budget_is_constant`, `grades_large_data_test` (1 000 mappings), `test_redaction_and_read_only`, capability `viewgrades` |
+| #3 DoD | PHPUnit/Behat/Playwright with a control consumer and at least two defective BUW constellations | TL | PHPUnit scenario (lastgrade + other subject, no score scope); Behat `grades.feature`; E2E: lastgrade block at "BUW", no AGS at "BUW without AGS" |
+| #3 DoD | Negative tests: missing scope, missing source grade, multiple links, lastgrade, 0/NULL, missing AGS line item | TL | `grade_diagnosis_test`, `repair_service_test::test_blockers` (`scope_missing`, `no_grade`, `lineitem_lookup_impossible`, `mapping_ambiguous`) |
+| #3 DoD | DE/EN, privacy, rights, query budget, documentation | TL | `lang_test` (en/de parity), `privacy/provider_test`, `access_control_test`, `docs/GRADES.md` |
+| #4 | Every own replay attempt with target, origin, time, attempt id, HTTP result, correlated chain | TL | `repair_service_test`, attempt page (E2E) |
+| #4 | Core sends claimed only as far as evidence goes; missing hooks shown as not observable | TL | `journal_test::test_parser_reads_real_core_output` (core's real output), `tasklog_importer` ("sent", booking unknown, no subject) |
+| #4 | Retry, error classes, 409, 2xx with unknown booking and verified receipt distinguished | TL | `error_classes`, `test_errors_retries_and_409`, booking levels; E2E 409 and receipt |
+| #4 | Journal separate from the completion outbox | CP/TL | own table `gatt`; completion tab reads local_lticompletionsync only |
+| #4 | No tokens/JWT/bodies/PII in logs; retention and audit | TL | `test_disable_stops_queue_and_nothing_secret_is_stored`, `journal_test::test_paging_latest_counts_and_retention` |
+| #4 | Paged indexes and batching, no N+1 | TL | keyset paging (`MAXPAGE` 200), `grades_large_data_test` (100 000 rows) |
+| #4 DoD | Mock HTTP / integration tests of all error classes incl. 409 and retry | TL | `ags_transport_test`, `repair_service_test` |
+| #4 DoD | 4.5 -> 5.2 tests incl. log mapping; non-observable core parts documented | TL | E2E (task log of the real core sync attributed per link); `GRADES.md` section 11 |
+| #4 DoD | Privacy, performance, export and rights in executed tests | TL | `provider_test`, `grades_large_data_test`, `channels_output_test`, E2E support package |
+| #5 | Unchanged 0 or positive grade to exactly one consumer; the second untouched | TL | `test_replay_to_exactly_one_target`, `test_zero_is_sent_and_result_compared`; E2E: BUW gets 65, Control grade and timestamp unchanged |
+| #5 | No edit of the original grade, no lastgrade reset, nothing overwritten on suspicion | TL | snapshot assertions in `repair_service_test`; E2E checks lastgrade 65 unchanged |
+| #5 | Preview shows target, score, maximum, scope and consumer-side limits | TL | Behat, E2E (line item URL of the BUW item, "Nothing has been sent.") |
+| #5 | No send without valid user/deployment/line item mapping or scopes | TL | `test_blockers` |
+| #5 | Only with module switch + `repairgrades` + sesskey + explicit confirmation | TL | Behat, E2E (forged opt-in POST by a viewer refused), `access_control_test` |
+| #5 | No automatic POST on viewing; double click and parallel replay locked | TL | `test_disable_stops_queue_and_nothing_secret_is_stored`, `test_double_click_parallel_and_rate_limit`; Behat ("An attempt for this target is still open") |
+| #5 | Journal shows attempt, error, result; 2xx not shown as booked | TL | E2E: after the replay "AGS result matches", never "booked" without receipt |
+| #5 DoD | E2E 4.5 provider / 5.2 consumer + control consumer: only the selected BUW line item gets the identical grade | TL | `grades_two_site.spec.js` "#5 replay ..." |
+| #5 DoD | Negative tests 409, 401/403/404, scope/URL errors, 0, changed source grade, multiple links, parallelism, 429/5xx | TL | `repair_service_test` (all), E2E 409 against the real 5.2 consumer |
+| #5 DoD | Rights, privacy, SSRF, performance, upgrade; disable/rollback strategy | TL | `access_control_test`, `provider_test`, `ags_transport_test`, `grades_large_data_test`, `upgrade_test::test_upgrade_from_030`; `GRADES.md` section 10 |
+| #6 | HTTP acceptance, results value, local value and confirmed booking are different levels | TL | booking levels, E2E (accepted -> results match -> booked by receipt -> mismatch after a teacher change) |
+| #6 | Without scope or partner answer the remote state stays unobservable | TL | `booking_evidence_test::test_results_need_the_granted_scope` |
+| #6 | Score, maximum, user, line item, timestamp, lock/override and mapping errors shown separately | TL | `test_results_compare`, `test_receipt_round_trip` (score, overridden) |
+| #6 | Receipt bound to consumer and attempt, no correlation by time | TL | request hash, attempt id, issuer check (`request_mismatch`, `not_this_platform`) |
+| #6 | Export data redacted, bounded, checked, auditable | TL | `channels_output_test::test_support_package`, E2E support package, audit codes |
+| #6 DoD | E2E: accepted and booked / accepted but not confirmed / wrong item / older timestamp / consumer not cooperative | TL, partly | E2E: booked (receipt), accepted unconfirmed (Control), newer consumer timestamp (409), consumer shows another value (teacher change), not cooperative = no receipt and no result scope (Control stays "accepted, booking unknown"). **Wrong item: PHPUnit only** (`test_results_compare` with another line item); not provoked on the real consumer |
+| #6 DoD | Contract, security, privacy, UI and report tests on 4.5/5.2 | TL | PHPUnit on 4.5 and 5.2; E2E |
+| #7 | Own completion tab, no grade replay, scores or lastgrade | TL | `completion_view_test`, E2E (no replay, no score column) |
+| #7 | Pending, sent (tool only), acked/applied, rejected, blocked, dead, revoked, unknown differentiated | TL | `test_sender_states`, `test_receiver_states`; E2E applied, revoked, retry, conflict (blocked), missing partner |
+| #7 | Repair buttons only with the plugin and its capability | TL | `test_actions_follow_rights_and_targets`, E2E viewer without buttons |
+| #7 | Idempotent repetition vs force resync with a new version explained; no invented single-user action | TL | reach texts, E2E (force resync: new version, "There is no single-learner variant.") |
+| #7 | No second network or outbox implementation | CP | actions post to `/local/lticompletionsync/index.php`; no sender code in this plugin |
+| #7 DoD | PHPUnit and E2E 4.5 -> 5.2: signed ACK, retry, missing partner, conflict, revocation, force resync | TL | `completion_two_site.spec.js` (8 tests) with local_lticompletionsync 932e5fa on both sites. 5.3 not run here |
+| #7 DoD | Gradebook unchanged; AGS progress fallback strictly limited/unconfirmed | TL, partly | E2E gradebook unchanged; "sent (tool only)" in `test_sender_states`. **AGS progress fallback not provoked E2E** (needs a platform without the partner plugin) |
+| #7 DoD | Documentation DE/EN, privacy/capabilities, accessibility | TL | `GRADES.md` (with German summary), en/de strings, E2E table structure |
+| #8 | Two channels visible and separated; own consumer success not counted for BUW | TL | E2E (Control "accepted" never changes BUW) |
+| #8 | Usable authorised replay for grades; force resync/retry usable for completion | TL | E2E #5, completion retry and force resync through the diagnostics buttons |
+| #8 | Read-only roles see no mutating action, no broken buttons | TL | Behat viewer scenarios, E2E viewer tests on both tabs |
+| #8 | Every action names target, reach, last evidence and horizon | TL | preview, reach column, `channels_output_test` |
+| #8 | Support reports split provider/consumer/unknown | TL | `test_support_package`, E2E |
+| #8 | Translated strings, keyboard/screen reader compatibility, minimised data | TL, partly | en/de parity; E2E captions, scoped headers, text badges, focus and Enter on tabs. **No screen reader run** |
+| #8 DoD | Real E2E user journeys incl. completion actions; Behat/Playwright; negative rights | TL | 19 E2E tests, Behat 5 scenarios |
+| #8 DoD | Reports match timeline/attempt records | TL | E2E: every journal row of the BUW connection is in the support package with the same state, error class, booking |
+| #9 | Passive diagnostics read only by default; active sender separate and switchable | TL | `test_disabled_by_default_and_dry_run_is_inert` |
+| #9 | No score change or foreign consumer touched; exact target; credentials/scopes checked | TL | `test_replay_to_exactly_one_target`, token scope check, E2E |
+| #9 | No unauthorised calls, double clicks, endless tasks, TLS downgrade, remote URL injection | TL | `access_control_test`, locks, `repairmaxattempts`, `ags_transport_test` (TLS options, SSRF, no redirects) |
+| #9 | No tokens/identities in logs/export; audit with operator, purpose, target, time | TL | `test_disable_stops_queue_and_nothing_secret_is_stored`, audit codes `graderepair_*` |
+| #9 | 100k+ transfer rows / 1000+ mappings without N+1 or unbounded reads | TL | `grades_large_data_test` |
+| #9 | No false "booked" at HTTP 2xx | TL | booking levels; E2E |
+| #9 DoD | Threat model, privacy concept, export/deletion tests, capabilities | TL | `GRADES.md` 8-9, `SECURITY.md`, `PRIVACY.md`, `provider_test` |
+| #9 DoD | PHPUnit, Behat, Playwright, network negative and load tests on 4.5/5.2, MariaDB/PostgreSQL | TL, partly | PHPUnit 4.5 PostgreSQL, 4.5 MariaDB 10.11, 5.2 PostgreSQL; Behat 4.5 PostgreSQL; Playwright 4.5 + 5.2 PostgreSQL. **Not run: Behat on 5.2, any cell on 5.2 MariaDB** |
+| #9 DoD | Regression of all existing evidence and read-only tests documented | TL | full plugin suite in every PHPUnit cell (results below) |
+| #1 | No job or cell with PHP <= 8.1; valid combinations and real coverage kept; docs | CP (verified by parsing) | 4.5 cells PHP 8.2 (PostgreSQL) and 8.3 (MariaDB), coverage job 8.3; `version.php` unchanged; YAML parsed and every `php`/`php-version` checked (none <= 8.1) |
+| #1 DoD | Job matrices verified; functional tests really green | CP/TL, partly | local PHPUnit/Behat runs with PHP 8.3; **the GitHub matrix has not run** (no CI access) |
+| #2 | `maturity-gate` job, name and dependencies gone; no formality decides CI; real checks active | CP (verified by parsing) | job graph: `ci-complete` needs `test`, `release-artefact`, `coverage`, `stale-files` and lists each result; no gate job, job name or `needs` entry of it is left (a comment states that no release, maturity or version formality decides) |
+| #2 DoD | Workflow graph and real job execution on the current commit | CP, partly | graph verified locally (PyYAML); **real execution on GitHub not done** (no push, no CI access) |
+
+### Local runner results 0.4.0 (2026-11-02, PHP 8.3.6, not CI)
+
+| Cell | Command | Result |
+|---|---|---|
+| 4.5 PostgreSQL 16 | `check_ci.sh --behat` (phplint, validate, savepoints, mustache, codechecker 0 warnings, phpdoc 0 warnings, PHPUnit, deprecation report, Behat non-JS) | static OK; `OK (646 tests, 945860 assertions)`; deprecation report clean; Behat 13 scenarios, 13 passed |
+| 4.5 MariaDB 10.11 | `LTIDIAG_DB=mariadb` PHPUnit suite | `OK (646 tests, 945860 assertions)`; 0 PHP deprecations, 0 skipped/incomplete/risky |
+| 5.2 PostgreSQL 16 (PHPUnit 11) | plugin suite with `--display-all-issues` | 646 tests, 0 failures; 0 PHP deprecations; 61 runner deprecations, all docblock metadata (owner rule) |
+| Two-site E2E, 4.5 tool + 5.2 platform, PostgreSQL | `playwright.channels.config.js` on a freshly installed stack built by `stack/setup.sh` | 19 passed (11 grades, 8 completion) in the last two runs, the last one with the final code; the two runs before failed on the support package test and led to the `package.php` fix; the earlier 17-test set passed three times |
+
+Mutation controls (each mutant in the mirrored tree, then restored and compared with the work tree): 409 made
+retryable -> `test_errors_retries_and_409` fails; same-second timestamp allowed ->
+`test_timestamps_monotonic_same_second_and_clock_skew` fails; the old `scoreOf` comparison -> `test_results_compare`
+fails; `lib/filelib.php` removed from `package.php` -> the Behat viewer scenario fails.
+
+Found by the new tests and fixed: `scoreOf` with `?type_id=` reported as a line item mismatch (E2E); support package
+download without `lib/filelib.php` (E2E); a join on an aggregate that PostgreSQL ran as a repeated nested loop after a
+bulk insert (load test on 5.2); core's `get_mock_launch()` uses `will($this->returnCallback())`, deprecated in PHPUnit 11
+(5.2 run; the grade scenario overrides it).
+
+Not done here: GitHub CI (no access; no push), Behat on 5.2, 5.2/5.3 with MariaDB, Moodle 5.3, the older Playwright
+specs of 0.3.0 (their stack `/home/claude/e2e/lib/e2e` does not exist in this environment), a screen reader run, the AGS
+progress fallback and a wrong line item on a real consumer.
+
+
 ## Release 0.3.0 / 2026102700 (family audit 2026-10-27, development branches)
 
 Evidence classes per the round brief: **code present** / **automated tests (local)** / **CI passed (not executed by us)** /

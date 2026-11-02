@@ -10,6 +10,9 @@ delete). Data is stored only to make diagnosis possible and is deleted after the
 | `tool_ltidiagnostics_imp` | user id of the importer, time | Provenance of imported logs | counted in the export, author unlinked (user id set to 0) |
 | `tool_ltidiagnostics_acc` | masked address (last part removed), path without query values, time | Access log evidence | deleted by retention; no user id |
 | `tool_ltidiagnostics_profile`, `_snap` | author id | Desired-state profiles, snapshots, imported partner packages and traces (0.3.0) | counted in the export, author unlinked |
+| `tool_ltidiagnostics_gatt` (0.4.0) | learner id, operator id, score given and maximum, redacted reason, hashes of AGS subject and line item, times, state codes | Grade attempt journal: core's sends from the task log and own replays | exported, deleted (learner); operator unlinked |
+| `tool_ltidiagnostics_gstate` (0.4.0) | none (hash of the target) | Monotonic AGS score state per replay target | deleted with the retention of the journal |
+| `tool_ltidiagnostics_grcpt` (0.4.0) | learner id, values from the consumer's receipt (score, maximum, grade time, locked/overridden flags) | Booking evidence from the consumer | exported, deleted |
 
 0.3.0: the observer adds markers `claim.given_name|family_name|email=present|absent` to launch observations (never a value).
 Partner packages contain hashes and masked forms of the connection identifiers, endpoints and public key thumbprints, no
@@ -26,8 +29,14 @@ the original id.
 Imported access log lines can be deleted per import (`logimport.php`, sesskey and confirmation, audited as `deleteimport`).
 The health check reads the enabled log stores through the reader API only and stores nothing from them.
 
+0.4.0, grade replay: the plugin itself sends personal data to a consumer only when an authorised person replays a
+grade - the AGS `userId` the consumer issued, the score, its maximum and a timestamp (declared as external location
+`lti_ags_consumer`). The support package and the grade receipt contain pseudonyms (`P-` + 8 hex characters of an HMAC
+per connection), codes, versions and hashes, never names, user ids, tokens or raw URLs; the support package contains no
+scores. Score values on the Grades tab need `tool/ltidiagnostics:viewgrades`.
+
 Not stored: names, e-mail addresses, tokens, JWT claims, payloads. Payload capture is not implemented. Reports are
 redacted by default; revealing identifiers needs the time-limited diagnostic mode, which is audited. The support role
 sees a pseudonymised diagnostic ID only; teachers see aggregates for their course.
 
-Tests: `privacy/provider_test`, `redactor_test`, `reporting_test`, `role_audit_test` (no names, e-mail addresses or user ids in packages, traces and transfer reports; every action audited with its actor), `integration/large_data_test::test_retention_per_data_class`, `local/field_matrix_test` (claim markers without values).
+Tests: `privacy/provider_test` (with the 0.4.0 tables and the external location), `local/grades/repair_service_test::test_disable_stops_queue_and_nothing_secret_is_stored`, `local/grades/channels_output_test::test_support_package`, `redactor_test`, `reporting_test`, `role_audit_test` (no names, e-mail addresses or user ids in packages, traces and transfer reports; every action audited with its actor), `integration/large_data_test::test_retention_per_data_class`, `local/field_matrix_test` (claim markers without values).

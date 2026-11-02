@@ -37,7 +37,7 @@ final class access_control_test extends \advanced_testcase {
     /** @var string[] All capabilities of the plugin. */
     private const CAPS = ['view', 'viewcourse', 'viewsupport', 'viewprivacy', 'configure', 'runchecks',
         'runprivatechecks', 'importlogs',
-        'export'];
+        'export', 'viewgrades', 'repairgrades'];
 
     /**
      * Create a user that holds the given capabilities in the system context only.
@@ -75,6 +75,7 @@ final class access_control_test extends \advanced_testcase {
             'runchecks' => RISK_CONFIG, 'runprivatechecks' => RISK_CONFIG,
             'importlogs' => RISK_PERSONAL | RISK_CONFIG, 'export' => RISK_PERSONAL,
             'viewcourse' => 0, 'viewsupport' => 0,
+            'viewgrades' => RISK_PERSONAL, 'repairgrades' => RISK_PERSONAL | RISK_CONFIG | RISK_DATALOSS,
         ];
         foreach ($expected as $name => $risk) {
             $this->assertSame($risk, (int) $caps["tool/ltidiagnostics:$name"]->riskbitmask, $name);

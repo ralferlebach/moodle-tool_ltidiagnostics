@@ -35,11 +35,11 @@ class curl_fetcher implements http_fetcher {
     private const MAX_BODY = 262144;
 
     /** @var dns_resolver Resolver used to validate and pin the target address. */
-    private $dns;
+    protected $dns;
     /** @var string[] Exact allow-list of private targets ("host:port"). */
-    private $exact;
+    protected $exact;
     /** @var array Transfer limits and the trust store: connecttimeout, timeout (seconds), cainfo (file or ''). */
-    private $limits;
+    protected $limits;
 
     /**
      * Constructor.
@@ -106,7 +106,7 @@ class curl_fetcher implements http_fetcher {
      *        pinned) for this one target.
      * @return array|null [options (curl options), addresses (validated list, empty for a literal)] or null to refuse.
      */
-    private static function pin(string $url, dns_resolver $dns, bool $exactallowed = false): ?array {
+    protected static function pin(string $url, dns_resolver $dns, bool $exactallowed = false): ?array {
         $parts = parse_url($url);
         $host = trim((string) ($parts['host'] ?? ''), '[]');
         if ($host === '') {

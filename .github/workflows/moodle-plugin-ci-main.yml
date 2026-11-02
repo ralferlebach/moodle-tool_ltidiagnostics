@@ -55,7 +55,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql, pg: '16', maria: '10.11' }
+          - { moodle: MOODLE_405_STABLE, php: '8.2', database: pgsql, pg: '16', maria: '10.11' }
           - { moodle: MOODLE_405_STABLE, php: '8.3', database: mariadb, pg: '16', maria: '10.11' }
           - { moodle: MOODLE_500_STABLE, php: '8.2', database: pgsql, pg: '16', maria: '10.11' }
           - { moodle: MOODLE_500_STABLE, php: '8.3', database: mariadb, pg: '16', maria: '10.11' }
@@ -259,7 +259,7 @@ jobs:
       - name: Set up PHP with a coverage driver
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.1'
+          php-version: '8.3'
           extensions: pgsql, zip, gd, xmlrpc, soap, intl
           # pcov is enough for line coverage and far faster than xdebug.
           coverage: pcov
@@ -304,37 +304,6 @@ jobs:
         env:
           COVERAGE_FLOOR: '50'
 
-  maturity-gate:
-    name: Release gate
-    needs: [test, release-artefact, coverage]
-    runs-on: ubuntu-22.04
-    # Without always() this job is skipped whenever one of its dependencies fails - and a skipped
-    # job is not re-executed by "re-run failed jobs", so it stays skipped for good and keeps
-    # ci-complete red even after every real failure has been fixed.
-    if: always()
-    steps:
-      - name: Check out plugin
-        uses: actions/checkout@v4
-
-      - name: Every release gate must be green
-        run: |
-          # This job is the single place where the release gates are judged, so it reports each
-          # result and fails on any that is not green - whatever the declared maturity is.
-          rc=0
-          for entry in             "test=${{ needs.test.result }}"             "release-artefact=${{ needs.release-artefact.result }}"             "coverage=${{ needs.coverage.result }}"; do
-            echo "  ${entry%%=*}: ${entry#*=}"
-            if [[ "${entry#*=}" != "success" ]]; then
-              rc=1
-            fi
-          done
-          if [[ $rc -ne 0 ]]; then
-            echo "Mindestens ein Release-Gate ist nicht gruen (siehe Liste oben)."
-            exit 1
-          fi
-          maturity=$(grep -oE 'MATURITY_[A-Z]+' version.php | head -1)
-          echo "Deklarierter Reifegrad: ${maturity:-unbekannt}"
-          echo "Alle Release-Gates sind gruen."
-
   stale-files:
     name: Stale files
     runs-on: ubuntu-22.04
@@ -369,19 +338,17 @@ jobs:
 
   ci-complete:
     name: CI complete
-    needs: [maturity-gate, stale-files]
+    needs: [test, release-artefact, coverage, stale-files]
     runs-on: ubuntu-22.04
+    # always(): a failed dependency must turn this check red, not leave it skipped.
     if: always()
     steps:
-      - name: All matrix jobs must have succeeded
+      - name: All test jobs must have succeeded
         run: |
-          # Every gate is named individually. The previous message printed only two of them, so a
-          # failure in any other job looked like an unexplained red build.
+          # Plain aggregation of the functional jobs: every job is listed with its own result, so a
+          # failure is visible where it happened. No release, maturity or version formality decides here.
           rc=0
-          # Only the two aggregating jobs are evaluated here. The matrix, artefact and
-          # coverage results are judged once, inside maturity-gate; checking them here as well
-          # duplicated the same condition in two places.
-          for entry in             "maturity-gate=${{ needs.maturity-gate.result }}"             "stale-files=${{ needs.stale-files.result }}"; do
+          for entry in             "test=${{ needs.test.result }}"             "release-artefact=${{ needs.release-artefact.result }}"             "coverage=${{ needs.coverage.result }}"             "stale-files=${{ needs.stale-files.result }}"; do
             name="${entry%%=*}"
             result="${entry#*=}"
             echo "  $name: $result"
@@ -390,7 +357,7 @@ jobs:
             fi
           done
           if [[ $rc -ne 0 ]]; then
-            echo "Mindestens ein Gate ist nicht gruen (siehe Liste oben)."
+            echo "Mindestens ein Testjob ist nicht gruen (siehe Liste oben)."
             exit 1
           fi
-          echo "All CI gates passed."
+          echo "All CI jobs passed."

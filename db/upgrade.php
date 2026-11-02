@@ -149,6 +149,28 @@ function xmldb_tool_ltidiagnostics_upgrade($oldversion) {
         upgrade_plugin_savepoint(true, 2026102700, 'tool', 'ltidiagnostics');
     }
 
+    if ($oldversion < 2026110200) {
+        // 0.4.0: grade channel. New tables for the grade attempt journal, the score state per replay target and imported
+        // partner receipts. The active grade replay starts switched off; existing settings are never overwritten.
+        tool_ltidiagnostics_create_missing_tables($dbman);
+        $defaults = [
+            'graderepair' => 0,
+            'graderepairconnections' => '',
+            'repairbatchmax' => 20,
+            'repairratelimit' => 30,
+            'repairmaxattempts' => 4,
+            'repairbackoff' => 300,
+            'repairresultcheck' => 1,
+            'retentiongradedays' => 365,
+        ];
+        foreach ($defaults as $name => $value) {
+            if (get_config('tool_ltidiagnostics', $name) === false) {
+                set_config($name, $value, 'tool_ltidiagnostics');
+            }
+        }
+        upgrade_plugin_savepoint(true, 2026110200, 'tool', 'ltidiagnostics');
+    }
+
     // Never declare DEFAULT="" on a CHAR NOT NULL column: XMLDB emits a debugging message for it,
     // and moodle-plugin-ci treats any debugging message during PHPUnit initialisation as a failure.
     return true;

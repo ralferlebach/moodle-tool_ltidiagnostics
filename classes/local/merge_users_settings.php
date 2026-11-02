@@ -49,6 +49,9 @@ final class merge_users_settings {
         'tool_ltidiagnostics_profile' => ['usermodified'],
         'tool_ltidiagnostics_snap' => ['userid'],
         'tool_ltidiagnostics_imp' => ['userid'],
+        // The operator column (operatorid) is not a tool_mergeusers user column; the table exception covers it as well.
+        'tool_ltidiagnostics_gatt' => ['userid'],
+        'tool_ltidiagnostics_grcpt' => ['userid'],
     ];
 
     /**

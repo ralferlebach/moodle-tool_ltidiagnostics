@@ -41,6 +41,30 @@ unless the schema changes (a bump triggers a slow PHPUnit re-initialisation).
 | Upgrade | `tests/upgrade_test.php::test_upgrade_from_021` | step 2026102700 from 2026102600: indexes, settings with 0.2.1 behaviour, existing settings kept, idempotent |
 | Playwright two-site (0.3.0) | `tests/playwright/messages_two_site.spec.js` (DIA-02), `partner_two_site.spec.js` (two-system check, DIA-02/03), `transfers_two_site.spec.js` (DIA-05, 4.5 <-> 5.3), `groups_two_site.spec.js` (GA-03) | real launches A (4.5) -> B (5.3) with own scenarios built by the scenario fixture of local_lticompletionsync (`CSYNC_LIB`), the stack's real nginx log, browser export/import of partner documents, completion delivery and a failed delivery; helpers in `lib.js` (`pluginCli`, `setConfig`, `ltiConfigFingerprint`, `logSlice`, `importLog`, `fixture`) and `fixtures/diag_fixture.php` |
 
+### Added in 0.4.0 (issues #3 to #9)
+
+| Layer | Where | What it proves |
+|-------|-------|----------------|
+| Grade scenario fixture | `tests/fixtures/grade_scenario.php` (trait, with core's `lti_advantage_testcase`) | control consumer A and BUW-like consumer B, learners with lastgrade block, other subject, no score scope (core 401), grade 0; core's real `sync_tool_grades` against a mocked AGS writes the task log |
+| Diagnosis | `tests/local/grades/grade_diagnosis_test.php` (6) | consumers separate, every prediction and risk, zero and missing grade, gating, task chain and prerequisites, redaction, read only, constant query count for 303 learners |
+| Journal | `tests/local/grades/journal_test.php` (5) | parser on core's real output, all outcomes, exception text dropped, importer attribution (exactly one link), idempotency, cursor, bounds, paging, retention without open attempts |
+| Load | `tests/integration/grades_large_data_test.php` (1) | 100 000 journal rows and 1 000 learner mappings of one link: capped keyset pages, grouped counts, constant diagnosis reads per page, bounded support package, retention in one statement keeping open attempts |
+| Replay | `tests/local/grades/repair_service_test.php` (10) | off by default, dry run inert, exactly one target, 0 sent, source changed between preview and send, every blocker, 401/403/404/409/429/5xx/timeout with retries and dead letter, 409 never retried, same-second and clock-skew timestamps, double click/parallel/lock/rate limit, line item never created, disable stops the queue, nothing secret stored |
+| Transport | `tests/local/grades/ags_transport_test.php` (4) | request shape, pin, no redirects, TLS options, SSRF refusals before any transfer, token assertion, JSON parsing |
+| Booking | `tests/local/grades/booking_evidence_test.php` (3) | results comparison (ratio, `scoreOf` with `?type_id=`), scope requirement, receipt round trip (forged token and wrong key set give "signature", clock skew, request mismatch, foreign platform, score and override mismatch, double import, unknown learner) |
+| Output | `tests/local/grades/channels_output_test.php` (3) | accessible read-only view, actions only with rights and targets, support package without names, ids, scores |
+| Completion tab | `tests/local/completion/completion_view_test.php` (5) | without the plugin, sender and receiver classes, actions and reach, read only and bounded (tables of local_lticompletionsync 932e5fa from `tests/fixtures/lticompletionsync_tables.xml`) |
+| Behat | `tests/behat/grades.feature` (5) | lastgrade finding, control unconfirmed, switches + dry run + confirmation + queue only, viewer without score and actions (and the support package downloaded and read), dry run without the right |
+| Playwright two-site | `tests/playwright/grades_two_site.spec.js` (11), `completion_two_site.spec.js` (8), config `playwright.channels.config.js`, stack `tests/playwright/stack/` | Moodle 4.5 tool and 5.2 platform with real launches, real core grade sync, real AGS (token, score, results), receipt with the real platform key, 409, rights, accessibility structure, support package against the journal; completion with signed ACK, revocation, retry, force resync, conflict, missing partner, gradebook unchanged |
+
+```bash
+# stack: tests/playwright/stack/README.md; then, from tests/playwright
+NODE_PATH=<dir with @playwright/test> npx playwright test -c playwright.channels.config.js
+```
+
+MariaDB locally: `LTIDIAG_DB=mariadb` in the 4.5 tree's `config.php` switches PHPUnit to a MariaDB 10.11 database
+(`php admin/tool/phpunit/cli/init.php`, then `vendor/bin/phpunit --testsuite tool_ltidiagnostics_testsuite`).
+
 Run the stack specs only under the shared stack lock and after mirroring the plugin into both sites:
 
 ```bash
@@ -55,7 +79,9 @@ Quick local lint: `/tmp/moodlecs/vendor/bin/phpcs --standard=moodle <path>` and 
 ## CI workflows
 
 `.github/workflows/moodle-plugin-ci-dev.yml` (branches except main, reduced matrix 4.5/5.0/5.3), `moodle-plugin-ci-main.yml`
-(main, full matrix 4.5 to 5.3 x PostgreSQL/MariaDB, release artefact, coverage floor, stale files) and `playwright.yml`
+(main, full matrix 4.5 to 5.3 x PostgreSQL/MariaDB, release artefact, coverage floor, stale files; `ci-complete` aggregates
+these jobs directly - the former release gate job was removed in 0.4.0, issue #2). PHP versions in CI: 8.2 to 8.4 (PHP 8.1
+removed in 0.4.0, issue #1; the 4.5 cells use 8.2 and 8.3, the coverage job 8.3) and `playwright.yml`
 (`npm run check` = `node --check` of every Playwright file). None has run (no GitHub access). Checked locally 2026-10-25 with
 `/home/claude/bin/ltici-check.py` (PyYAML parse, job graph and `needs`, matrix cells, Behat tag, archive prefix, every referenced
 plugin path, no clone of plugin repositories): 0 errors for all five family plugins.

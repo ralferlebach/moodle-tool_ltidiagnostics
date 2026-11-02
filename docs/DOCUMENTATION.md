@@ -174,6 +174,10 @@ trace ids, user/course/activity ids and time windows; an address never matches b
 | `support.php` | viewsupport | no |
 | `course.php` | viewcourse (course context) | no |
 | `audit.php` | viewprivacy | no |
+| `connection.php` tabs `grades`, `completion` (0.4.0) | view (+ viewgrades for score values) | opt-in button and result check via `repair.php` |
+| `repair.php` (0.4.0) | view; repairgrades + site setting + opt-in for a replay; configure for a receipt import; export for a receipt request | Form API (sesskey) for replay, retry and receipt; opt-in/out and result check POST with `require_sesskey` |
+| `receipt.php` (0.4.0, platform side) | view + export | Form API; answers a receipt request with a signed receipt (read only on the gradebook) |
+| `package.php` (0.4.0) | view + export | no (download, audited) |
 
 ## 3. Feasibility gates and evidence
 
@@ -205,11 +209,15 @@ tool-side AGS has no authorised test and so stops at `authorised` or `configured
 | `privatetargetallowlist` | empty | Exactly allowed private targets, `host` or `host:port` per line (0.3.0) |
 | `importratelimit` | 10 | Log imports per person and hour, 0 = no limit (0.3.0) |
 | `retentionaccdays`, `retentionauditdays`, `retentionsnapdays`, `retentionpartnerdays` | 30, 365, 365, 30 | Retention per data class (0.3.0), see section 6.7 |
+| `graderepair` | 0 | Grade replay module (0.4.0); also needs the opt-in per connection (`graderepairconnections`) and `repairgrades` |
+| `repairresultcheck` | 1 | Read the consumer's AGS result after a replay when the result scope was granted |
+| `repairbatchmax`, `repairratelimit`, `repairmaxattempts`, `repairbackoff` | 20, 30, 4, 300 | Batch size, replays per person and hour, attempts, first retry delay in seconds (bounded 1-100, 1-500, 1-10, 30-86400) |
+| `retentiongradedays` | 365 | Retention of the grade journal (open attempts are kept) |
 
 Internal defaults without a settings page (set with `set_config` / `admin/cli/cfg.php`): `maxfilesize` 52428800 bytes
 (upload limit for log imports), `clockwindow` 120 seconds (tolerated clock difference).
 
-Database tables (all `tool_ltidiagnostics_*`): `obs`, `audit`, `profile`, `snap`, `imp`, `acc`.
+Database tables (all `tool_ltidiagnostics_*`): `obs`, `audit`, `profile`, `snap`, `imp`, `acc`; since 0.4.0 `gatt`, `gstate`, `grcpt`.
 
 ## 5. Language packs
 
@@ -346,3 +354,12 @@ time or an address would link two rows.
 G1/G2 are unchanged: Moodle has no hook for OIDC/JWT and AGS/NRPS/DL calls. The partner package and the partner trace
 are the documented, non-instrumenting way to see the other half; the message matrix names every message that stays
 `not_observable` or "transport only".
+
+## 7. Release 0.4.0: grade and completion channels
+
+Described in `GRADES.md`: integration decision, diagnosis, journal, replay, booking evidence, completion tab, support
+package, threat model, privacy, disable and rollback, and what stays not observable from the provider.
+
+Change to gate G7: the grade replay is the first action of this plugin that writes at a partner (one AGS score). It is
+not a test and not a diagnosis: a separate module, off by default, behind the site setting, the opt-in of the connection,
+the capability `repairgrades`, a dry run and a confirmation. Every diagnosis stays read only.
