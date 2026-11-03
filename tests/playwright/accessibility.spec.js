@@ -97,7 +97,7 @@ test('the health check can be reached and submitted with the keyboard only', asy
 test('the tab bar is operable with Tab and Enter', async ({ page }) => {
   await login(page, siteA, seed.admins.a);
   await page.goto(connectionUrl(siteA, platformKey, 'matrix'));
-  const link = page.getByRole('link', { name: 'Health check' }).first();
+  const link = page.getByRole('link', { name: 'Connection diagnosis' }).first();
   await link.focus();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/tab=health/);

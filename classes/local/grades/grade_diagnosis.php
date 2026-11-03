@@ -108,6 +108,9 @@ class grade_diagnosis {
             'summary' => ['prediction' => [], 'evidence' => []],
             'findings' => [],
             'tasklog' => null,
+            'counters' => pair_query::empty_counters(),
+            'scopelinks' => [],
+            'filters' => pair_query::clean([]),
         ];
         if (!$out['applicable']) {
             return $out;
@@ -124,12 +127,6 @@ class grade_diagnosis {
 
         $out['prerequisites'] = $this->prerequisites($now);
         $links = $this->links($conn, $reveal);
-        $out['links'] = $links;
-        $filterlink = (int) ($options['resourcelinkrowid'] ?? 0);
-        $linkids = $filterlink ? array_intersect([$filterlink], array_keys($links)) : array_keys($links);
-        [$pairs, $total] = $this->pairs($linkids, (int) ($options['userid'] ?? 0), $offset, $limit);
-        $out['total'] = $total;
-
         $resources = [];
         foreach (array_unique(array_column($links, 'toolid')) as $toolid) {
             $res = $this->reader->resource((int) $toolid);
@@ -137,6 +134,43 @@ class grade_diagnosis {
                 $resources[(int) $toolid] = $res;
             }
         }
+        // Scope (issue #13) and publication filters work on the published resources, in SQL through their link ids.
+        $courseid = (int) ($options['courseid'] ?? 0);
+        $cmid = (int) ($options['cmid'] ?? 0);
+        $filters = pair_query::clean(($options['filters'] ?? []) + [
+            'linkid' => (int) ($options['resourcelinkrowid'] ?? 0),
+            'userid' => (int) ($options['userid'] ?? 0),
+        ]);
+        $inscope = [];
+        foreach ($links as $id => $link) {
+            if (in_array($link['toolid'], self::tools_in_scope($resources, $courseid, $cmid, $filters), true)) {
+                $inscope[$id] = $link;
+            }
+        }
+        $out['scopelinks'] = array_keys($inscope);
+        $out['filters'] = $filters;
+        $items = [];
+        foreach ($resources as $toolid => $res) {
+            $items[$toolid] = (int) $res['itemid'];
+        }
+        $page = pair_query::page(
+            $conn->key,
+            (int) $conn->deploymentrowid,
+            self::tools_in_scope($resources, $courseid, $cmid, $filters),
+            $items,
+            $filters,
+            $offset,
+            $limit
+        );
+        $pairs = $page['pairs'];
+        // Links of the page that the bounded link list did not load (deployments with very many links).
+        $missing = array_diff(array_map(fn($p) => (int) $p->resourcelinkrowid, $pairs), array_keys($links));
+        if ($missing) {
+            $links += $this->links($conn, $reveal, array_values(array_unique($missing)));
+        }
+        $out['links'] = $links;
+        $out['total'] = $page['total'];
+        $out['counters'] = $page['counters'];
         $out['resources'] = $resources;
 
         // Bulk data for the page.
@@ -181,6 +215,86 @@ class grade_diagnosis {
                 ($out['summary']['evidence'][$row['evidence']['level']] ?? 0) + 1;
         }
         $out['findings'] = $this->findings($out);
+        return $out;
+    }
+
+    /**
+     * Published resources (enrol_lti tool ids) of the connection inside a course/activity scope.
+     *
+     * @param connection $conn Connection.
+     * @param \tool_ltidiagnostics\local\scope $scope Scope.
+     * @return int[]|null Null when the scope does not restrict courses or activities.
+     */
+    public function scope_toolids(connection $conn, \tool_ltidiagnostics\local\scope $scope): ?array {
+        global $DB;
+        if (!$scope->courseid && !$scope->cmid) {
+            return null;
+        }
+        $ids = $DB->get_fieldset_select(
+            'enrol_lti_resource_link',
+            'DISTINCT resourceid',
+            'ltideploymentid = :dep',
+            ['dep' => (int) $conn->deploymentrowid]
+        );
+        $out = [];
+        foreach ($ids as $toolid) {
+            $res = $this->reader->resource((int) $toolid);
+            if (
+                $res && (!$scope->courseid || $res['courseid'] === $scope->courseid)
+                && (!$scope->cmid || $res['cmid'] === $scope->cmid)
+            ) {
+                $out[] = (int) $toolid;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Every (link, learner) pair of the filtered population, bounded (server side "select every match", issue #22).
+     *
+     * @param connection $conn Connection.
+     * @param \tool_ltidiagnostics\local\scope $scope Scope.
+     * @param array $filters Clean pair filters.
+     * @param int $max Maximum; more matches return no pairs and the total.
+     * @return array [pairs (linkid, userid), total]
+     */
+    public function matching_pairs(connection $conn, \tool_ltidiagnostics\local\scope $scope, array $filters, int $max): array {
+        if ($conn->role !== connection::ROLE_TOOL || !$conn->deploymentrowid) {
+            return [[], 0];
+        }
+        $links = $this->links($conn, false);
+        $resources = [];
+        foreach (array_unique(array_column($links, 'toolid')) as $toolid) {
+            if ($res = $this->reader->resource((int) $toolid)) {
+                $resources[(int) $toolid] = $res;
+            }
+        }
+        $filters = pair_query::clean($filters);
+        $items = array_map(fn($r) => (int) $r['itemid'], $resources);
+        $tools = self::tools_in_scope($resources, $scope->courseid, $scope->cmid, $filters);
+        return pair_query::all($conn->key, (int) $conn->deploymentrowid, $tools, $items, $filters, $max);
+    }
+
+    /**
+     * Published resources (tool ids) inside the course/activity scope and the grade sync filter.
+     *
+     * @param array $resources Tool id => resource (courseid, cmid, gradesync).
+     * @param int $courseid Course or 0.
+     * @param int $cmid Course module or 0.
+     * @param array $filters Clean pair filters (gradesync).
+     * @return int[]
+     */
+    private static function tools_in_scope(array $resources, int $courseid, int $cmid, array $filters): array {
+        $out = [];
+        foreach ($resources as $toolid => $res) {
+            if (
+                ($courseid && $res['courseid'] !== $courseid) || ($cmid && $res['cmid'] !== $cmid)
+                || ($filters['gradesync'] !== '' && (string) (int) $res['gradesync'] !== $filters['gradesync'])
+            ) {
+                continue;
+            }
+            $out[] = (int) $toolid;
+        }
         return $out;
     }
 
@@ -260,20 +374,34 @@ class grade_diagnosis {
      *
      * @param connection $conn Connection.
      * @param bool $reveal Show identifiers in clear.
+     * @param int[]|null $ids Only these rows (null: the first 5 000 of the deployment).
      * @return array Keyed by resource link row id.
      */
-    public function links(connection $conn, bool $reveal): array {
+    public function links(connection $conn, bool $reveal, ?array $ids = null): array {
         global $DB;
         $out = [];
-        $rs = $DB->get_recordset(
-            'enrol_lti_resource_link',
-            ['ltideploymentid' => $conn->deploymentrowid],
-            'id ASC',
-            'id, resourcelinkid, resourceid, lineitemsservice, lineitemservice, lineitemscope, resultscope, scorescope,
-             timecreated, timemodified',
-            0,
-            5000
-        );
+        $fields = 'id, resourcelinkid, resourceid, lineitemsservice, lineitemservice, lineitemscope, resultscope, scorescope,
+             timecreated, timemodified';
+        if ($ids === null) {
+            $rs = $DB->get_recordset(
+                'enrol_lti_resource_link',
+                ['ltideploymentid' => $conn->deploymentrowid],
+                'id ASC',
+                $fields,
+                0,
+                5000
+            );
+        } else {
+            [$insql, $params] = $DB->get_in_or_equal($ids ?: [0], SQL_PARAMS_NAMED, 'lk');
+            $params['dep'] = $conn->deploymentrowid;
+            $rs = $DB->get_recordset_select(
+                'enrol_lti_resource_link',
+                "ltideploymentid = :dep AND id $insql",
+                $params,
+                'id ASC',
+                $fields
+            );
+        }
         foreach ($rs as $r) {
             $scopes = self::scopes($r);
             $out[(int) $r->id] = [
@@ -307,42 +435,6 @@ class grade_diagnosis {
             'lineitemreadonly' => strpos($line, 'lineitem.readonly') !== false,
             'result' => strpos((string) ($r->resultscope ?? ''), 'result.readonly') !== false,
         ];
-    }
-
-    /**
-     * Page of (resource link, learner) pairs.
-     *
-     * @param int[] $linkids Resource link row ids.
-     * @param int $userid Optional user filter.
-     * @param int $offset Offset.
-     * @param int $limit Limit.
-     * @return array [pairs (\stdClass[] with mapid, resourcelinkrowid, ltiuserid, userid, toolid, lastgrade,
-     *     ltideploymentid, sourceidhash), total (int)]
-     */
-    private function pairs(array $linkids, int $userid, int $offset, int $limit): array {
-        global $DB;
-        if (!$linkids) {
-            return [[], 0];
-        }
-        [$insql, $params] = $DB->get_in_or_equal(array_values($linkids), SQL_PARAMS_NAMED, 'rl');
-        $where = "url.resourcelinkid $insql";
-        if ($userid) {
-            $where .= ' AND lu.userid = :userid';
-            $params['userid'] = $userid;
-        }
-        $from = "FROM {enrol_lti_user_resource_link} url
-                 JOIN {enrol_lti_users} lu ON lu.id = url.ltiuserid";
-        $total = (int) $DB->count_records_sql("SELECT COUNT(1) $from WHERE $where", $params);
-        $rows = $DB->get_records_sql("SELECT url.id AS mapid, url.resourcelinkid AS resourcelinkrowid, lu.id AS ltiuserid,
-                                             lu.userid, lu.toolid, lu.lastgrade, lu.ltideploymentid, lu.sourceid
-                                        $from
-                                       WHERE $where
-                                    ORDER BY url.id ASC", $params, $offset, $limit);
-        foreach ($rows as $r) {
-            $r->sourceidhash = $r->sourceid === null || $r->sourceid === '' ? '' : hash('sha256', (string) $r->sourceid);
-            unset($r->sourceid);
-        }
-        return [array_values($rows), $total];
     }
 
     /**

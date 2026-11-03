@@ -171,6 +171,23 @@ function xmldb_tool_ltidiagnostics_upgrade($oldversion) {
         upgrade_plugin_savepoint(true, 2026110200, 'tool', 'ltidiagnostics');
     }
 
+    if ($oldversion < 2026110300) {
+        // 0.5.0: the journal records the confirmed selection (bulk replay) an attempt belongs to (issue #22).
+        $table = new xmldb_table('tool_ltidiagnostics_gatt');
+        $field = new xmldb_field('batchid', XMLDB_TYPE_CHAR, '36', null, XMLDB_NOTNULL, null, null, 'purpose');
+        if ($dbman->table_exists($table) && !$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        $index = new xmldb_index('batchid', XMLDB_INDEX_NOTUNIQUE, ['batchid']);
+        if ($dbman->table_exists($table) && !$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+        if (get_config('tool_ltidiagnostics', 'selectionttl') === false) {
+            set_config('selectionttl', 900, 'tool_ltidiagnostics');
+        }
+        upgrade_plugin_savepoint(true, 2026110300, 'tool', 'ltidiagnostics');
+    }
+
     // Never declare DEFAULT="" on a CHAR NOT NULL column: XMLDB emits a debugging message for it,
     // and moodle-plugin-ci treats any debugging message during PHPUnit initialisation as a failure.
     return true;

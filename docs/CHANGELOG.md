@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.5.0 - 2026-11-03 (alpha), version 2026110300
+
+Issues #10 to #28 (UX user stories, test coverage, follow-up order of 2026-11-02). Upgrade step 2026110300 from 0.4.0
+(2026110200): the grade journal gets the column `batchid` with an index, the new setting `selectionttl` (900 s) is
+added; nothing existing changes. New capability `tool/ltidiagnostics:viewidentities` (no archetype).
+
+* **#10 Menu.** The category "LTI Diagnostics" ("LTI-Diagnose") is registered for every capability that opens one of its
+  pages (`view`, `viewsupport`, `importlogs`, `viewprivacy`), exactly once: below *Plugins > Admin tools*
+  (*Plugins > Dienstprogramme*) when the user has that category, else at the root of the site administration (Moodle
+  4.5 creates *Admin tools* only for `moodle/site:config`). Capabilities not installed yet (pending upgrade) are skipped
+  instead of asked. Delegated roles need core's `moodle/site:configview` to see the *Site administration* menu at all;
+  without it the pages stay reachable by URL and by the quick links of the overview.
+* **#11 Languages.** Every visible text comes from the language files (en and de, 2 020 strings, same keys, same
+  placeholders); a token based scan of pages, renderers and forms with a reviewed exception list runs in PHPUnit;
+  `HTTP `, ` #` and ` (failed)` were replaced by strings. Machine identifiers (codes, export keys) are unchanged.
+* **#12 Names, ids and edit links.** Connections are named with their registration/deployment or tool type id, each with
+  its own label; full issuer, client and deployment id for users with the view right; "Edit" links to the core
+  configuration (registration, deployments, published resources, tool type) only with the core capability; every page
+  has a link back to the overview with its filters.
+* **#13 Scope bar.** Course, activity and period (calendar days in the user's time zone, stored as UTC) above the tabs,
+  for every tab and export, with chips, reset and a note on tabs that are system wide. Rows, totals, counters, paging
+  and exports share one SQL population. No "open work" metric: defined counters per dimension (source grade present /
+  0 / NULL; newest transfer not attempted / skipped by core / queued / accepted by HTTP / failed; booking confirmed /
+  differs / not proven / nothing to check), disjoint inside a dimension and never added across dimensions.
+* **#14 Tabs.** "Function check", "Messages and fields", "Connection diagnosis", then grades, completion, timeline,
+  evidence, history; duplicate headings and the global completion buttons removed; partner evidence only in the
+  connection diagnosis ("Collect partner evidence for this connection").
+* **#15/#27 Support and audit.** Support list by name, local ids and diagnostic id with the most urgent finding and the
+  next step; a case page with the way to the diagnosis, the grade journal, the evidence and the audit (each link only
+  with the right); no self links. Learners' names only with `viewidentities`. Audit with real names and profile links,
+  localised action names, filters (person, kind of action, connection, period) and paging 20 to 500.
+* **#16/#20 Network checks and connection diagnosis.** Every stored check names target (redacted URL), method,
+  executor, UTC time, resolved addresses, proxy path, code and what it proves; a GET 405 on the POST-only token endpoint
+  is expected; a failed check contradicted by an observed launch is downgraded, reported as counter-evidence and never
+  the root cause. Separate ratings for launch, key set, key set check, token endpoint check, AGS transport and booking.
+* **#17/#24 Completion.** Without a working local_lticompletionsync the tab is hidden; a direct link explains the state
+  (absent, code only, waiting for upgrade, incomplete) in one note, without actions or invented links. AGS is
+  independent of it.
+* **#18/#19 Function check and messages.** What each service check covers, how to collect missing evidence, drill-down
+  actions marked read-only or "changes data at the partner" (only the replay); field requirement, runtime evidence and
+  core validation per field; filters for message and state.
+* **#21/#22/#23/#25 Asynchronous sections and bulk replay.** Grade rows, grade journal, evidence and timeline load with
+  filters and page sizes 20/50/100/500 through `tool_ltidiagnostics_render_section` (same code path as the page,
+  history, back/forward, live region; every link and form works without JavaScript). Bulk replay: marked rows, all
+  rows of a page or every match (server side, at most `repairbatchmax`), a selection with a lifetime bound to the
+  session and the connection, a preview of every target, one batch id, re-verification per target, a used selection
+  cannot start a second batch, batch status page; HTTP 2xx is never shown as booked.
+* **#26 History.** Changes of the function check with before/after, changed steps and relevance; the first snapshot is
+  the baseline; hashes only under technical details.
+* **Fixes found by the new tests.** The selection form wrapped the result-check forms of the rows (nested forms: a click
+  on "Preview marked rows" ran the result check) - the selection form now follows the table and the boxes join it
+  through the `form` attribute; the rows and journal sections ran one query per row for names and courses (500 rows:
+  539 reads) - names are loaded per page and course/activity references cached per request; stored network checks
+  dropped target and addresses, so the diagnosis could not name them; the latest journal row per pair is read through
+  a grouped derived table instead of a correlated subquery; `<code>` contrast on striped rows (axe).
+* **Fixes found by an independent code review.** Connection names in the audit filter were printed unescaped into
+  `<option>` (a name from dynamic registration could inject markup); "select every match" ignored the name search; the
+  report export read the scope dates as UTC midnight and dropped the last day (it now uses the same scope as the view);
+  the grade rows bound every resource link id twice (more than 2 100 parameters break MSSQL, more than 1 000 per IN list
+  Oracle) - they are now selected by deployment and published resource; learner names in two link texts were not
+  escaped; a negative grade was counted as "no grade" but not filtered as such ("present" now means "not 0"); scope chips
+  were escaped twice; a section update replaced the URL parameters of the other section of the page in the history.
+  Kept on purpose and documented: the endpoint host of a network check is shown to users with the view right (as the
+  issuer in the connection header, issue #12), and the source grade bucket (graded, 0, empty) is shown without
+  `viewgrades` (score values stay hidden; 0 versus empty is the core diagnosis "0 is never sent").
+* **#28 Tests.** PHPUnit 4.5 (PostgreSQL and MariaDB) and 5.2: count invariants (`pair_query_test`), admin tree per
+  capability, identities, scope, audit filters, service ratings and probe counter-evidence, bulk selection, journal
+  filters, external function, i18n scan, render smoke test in en/de, upgrade step, load test (100 000 journal rows,
+  1 000 mappings, 100 000 observations, 500-row sections with query budgets). Behat `ux.feature` (14 scenarios,
+  German menu path with a minimal fixture language pack). Playwright `ux_two_site.spec.js` (10 tests on the 4.5 -> 5.2
+  stack: AJAX paging with history, non-JS, counters, journal, read-only views never POST, bulk replay with double
+  submit, scope, support journey, completion, rights, axe in en/de and screenshots). See `docs/STORY_MATRIX.md`.
+
 ## 0.4.0 - 2026-11-02 (alpha), version 2026110200
 
 Issues #1 to #9 of the development branch. Upgrade step 2026110200 from 0.3.0 (2026102700): three new tables, new

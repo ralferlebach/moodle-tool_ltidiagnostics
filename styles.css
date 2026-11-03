@@ -1,0 +1,9 @@
+/* Machine identifiers (diagnostic ids, codes) keep a contrast of at least 4.5:1 also on striped and highlighted rows. */
+.path-admin-tool-ltidiagnostics code {
+    color: #a3195b;
+}
+
+/* A section that is being loaded asynchronously is dimmed, its content stays readable. */
+.path-admin-tool-ltidiagnostics [data-ltidiag-section][aria-busy="true"] {
+    opacity: .6;
+}

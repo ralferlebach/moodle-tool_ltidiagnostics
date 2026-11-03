@@ -204,6 +204,72 @@ final class reporting_test extends \advanced_testcase {
     }
 
     /**
+     * The audit page filters on the server (person, kind of action, connection, period); total and rows agree; action
+     * codes get localised names, unknown codes stay recognisable (issues #15, #27).
+     */
+    public function test_audit_page_filters_and_labels(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $dpo = $this->getDataGenerator()->create_user(['firstname' => 'Dana', 'lastname' => 'Privacy',
+            'email' => 'dana@example.invalid']);
+        audit::log('view_grades', 'tool:1:2');
+        audit::log('export', 'tool:1:2', 'format=json');
+        audit::log('graderepair_http_accepted', 'tool:1:3');
+        audit::log('modeenable', '', 'minutes=30', (int) $dpo->id);
+        audit::log('somethingnew', 'tool:1:3');
+        $DB->set_field('tool_ltidiagnostics_audit', 'timecreated', 1000, ['action' => 'somethingnew']);
+
+        $all = audit::page([], 0, 20);
+        $this->assertSame(5, $all['total']);
+        $this->assertCount(5, $all['rows']);
+        $this->assertNotEmpty($all['rows'][0]->lastname, 'Name fields come with the rows (one query).');
+        $this->assertSame(2, audit::page(['connkey' => 'tool:1:2'], 0, 20)['total']);
+        $this->assertSame(1, audit::page(['group' => 'export'], 0, 20)['total']);
+        $this->assertSame(1, audit::page(['group' => 'grades'], 0, 20)['total']);
+        $this->assertSame(1, audit::page(['group' => 'view'], 0, 20)['total']);
+        $this->assertSame(1, audit::page(['group' => 'config'], 0, 20)['total']);
+        $this->assertSame(5, audit::page(['group' => 'nonsense'], 0, 20)['total'], 'Unknown groups do not filter.');
+        $this->assertSame(1, audit::page(['usersearch' => 'Privacy'], 0, 20)['total']);
+        $this->assertSame(1, audit::page(['usersearch' => 'dana@example'], 0, 20)['total']);
+        $this->assertSame(1, audit::page(['to' => 2000], 0, 20)['total']);
+        $this->assertSame(4, audit::page(['from' => 2000], 0, 20)['total']);
+        $page = audit::page([], 2, 2);
+        $this->assertSame(5, $page['total']);
+        $this->assertCount(2, $page['rows']);
+
+        $this->assertSame(get_string('auditaction_export', 'tool_ltidiagnostics'), audit::action_label('export'));
+        $this->assertSame(
+            get_string('auditaction_view_', 'tool_ltidiagnostics', get_string('tab_grades', 'tool_ltidiagnostics')),
+            audit::action_label('view_grades')
+        );
+        $accepted = get_string('gstate_http_accepted', 'tool_ltidiagnostics');
+        $this->assertSame(
+            get_string('auditaction_graderepair_', 'tool_ltidiagnostics', $accepted),
+            audit::action_label('graderepair_http_accepted')
+        );
+        $match = get_string('gbook_results_match', 'tool_ltidiagnostics');
+        $this->assertSame(
+            get_string('auditaction_graderesult_', 'tool_ltidiagnostics', $match),
+            audit::action_label('graderesult_results_match')
+        );
+        $this->assertSame(get_string('auditaction_unknown', 'tool_ltidiagnostics'), audit::action_label('somethingnew'));
+        // Every action code the plugin writes has a label of its own or of its prefix.
+        foreach (
+            ['deleteimport', 'export', 'export_support', 'graderepair_batch', 'graderepair_optin', 'graderepair_optout',
+                'gradereceipt_answer', 'gradereceipt_request', 'logimport', 'modedisable', 'modeenable', 'partner_export',
+                'partner_import', 'partner_live', 'partner_live_private', 'profilesave', 'runchecks', 'runchecks_private',
+                'trace_export', 'trace_import', 'transfers_export', 'graderepair_request', 'view_course', 'view_support',
+                'view_transfers',
+                'view_matrix', 'view_health', 'view_evidence', 'view_timeline', 'view_grades_rows', 'view_grades_journal',
+                'viewconnection', 'viewunmasked'] as $code
+        ) {
+            $this->assertNotSame(get_string('auditaction_unknown', 'tool_ltidiagnostics'), audit::action_label($code), $code);
+            $this->assertStringNotContainsString('_', audit::action_label($code), "$code has a readable label");
+        }
+    }
+
+    /**
      * The diagnostic mode has a time limit, a maximum and an audit trail.
      */
     public function test_diagnostic_mode_ttl(): void {
@@ -297,20 +363,23 @@ final class reporting_test extends \advanced_testcase {
     }
 
     /**
-     * Probe snapshots keep the results but not the addresses.
+     * Probe snapshots keep the result, the target without credentials and query values, and only valid addresses
+     * (issue #16: a check result names its target and path); reports built from them carry no URL.
      */
-    public function test_probe_snapshot_drops_addresses(): void {
+    public function test_probe_snapshot_keeps_redacted_target(): void {
         $this->resetAfterTest();
         $this->setAdminUser();
         $probes = ['jwks' => [
-            'purpose' => 'jwks', 'code' => 'ok', 'url' => 'https://secret.example.org/jwks', 'dns' => ['203.0.113.7'],
-            'httpstatus' => 200, 'checkedat' => 1000,
+            'purpose' => 'jwks', 'code' => 'ok', 'url' => 'https://user:pw@partner.example.org/jwks?token=abc&x=1',
+            'dns' => ['203.0.113.7', 'not-an-ip', '2001:db8::1'], 'httpstatus' => 200, 'checkedat' => 1000,
         ]];
         snapshot::save_probes('platform:9', $probes, 1000);
         $back = snapshot::latest_probes('platform:9');
         $this->assertSame('ok', $back['jwks']['code']);
-        $this->assertArrayNotHasKey('url', $back['jwks']);
-        $this->assertArrayNotHasKey('dns', $back['jwks']);
+        $this->assertStringStartsWith('https://partner.example.org/jwks', $back['jwks']['url']);
+        $this->assertStringNotContainsString('abc', $back['jwks']['url']);
+        $this->assertStringNotContainsString('pw@', $back['jwks']['url']);
+        $this->assertSame(['203.0.113.7', '2001:db8::1'], $back['jwks']['dns']);
         $this->assertSame([], snapshot::latest_probes('platform:404'));
     }
 

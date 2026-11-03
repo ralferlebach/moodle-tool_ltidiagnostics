@@ -62,6 +62,30 @@ unless the schema changes (a bump triggers a slow PHPUnit re-initialisation).
 NODE_PATH=<dir with @playwright/test> npx playwright test -c playwright.channels.config.js
 ```
 
+### Added in 0.5.0 (issues #10 to #28)
+
+The mapping of every user story to its fixture and tests is `docs/STORY_MATRIX.md`.
+
+| Layer | Where | What it proves |
+|-------|-------|----------------|
+| Count invariants | `tests/local/grades/pair_query_test.php` (4) | every counter equals the total of its filter, dimensions disjoint and complete, NULL/0/lastgrade skip/2xx without booking/401, two consumers, paging = every match, empty course, unknown filter values dropped |
+| Menu, navigation, identities, scope | `tests/navigation_identity_test.php` (9) | admin tree per single capability (category once, own page only, no settings), none without capability, admin under *Admin tools*; labels with ids, core edit links by capability, back link with filters; names only with `viewidentities`, unknown users, formatted course names, edit link by capability; scope validation in the user's time zone |
+| Sections and evidence | `tests/sections_evidence_test.php` (3) | external function = page rendering, audit of the view, rights, unknown section/connection, foreign parameters ignored; evidence filters service/text/attribution/course/paging; task runs never silently scoped; page sizes |
+| Render smoke | `tests/output/render_smoke_test.php` (2: en, de) | every view part with data, with and without scope and snapshots, without debugging (missing strings), placeholders, empty badges, nested forms, unlabelled controls |
+| i18n scan | `tests/lang_test.php::test_i18n_scan_of_output_code`, `test_machine_identifiers_unchanged`, extended `test_literal_string_ids_exist` | token scan of pages, renderers and forms with a reviewed exception list; templates without literal text; `$t()`/`self::t()` ids exist in en and de |
+| Health services | `tests/local/matrix_health_test.php` (+3) | probe contradicted by a real launch (downgraded, counter-evidence, never root cause), GET 405 on the token endpoint expected, AGS transport and booking rated separately |
+| Audit | `tests/local/reporting_test.php::test_audit_page_filters_and_labels` | person/kind/connection/period filters, totals, labels for every action code |
+| Bulk replay | `tests/local/grades/repair_service_test.php::test_bulk_selection_and_batch` | selection TTL, bound to its connection, too large/empty refused, one batch id, used selection cannot start a second batch, double submit refused (open attempt), partial failure (409) leaves the other target |
+| Journal filters | `tests/local/grades/journal_test.php::test_server_side_filters` | origin, transfer class, attribution, period, scope (empty scope = nothing), person, link, batch |
+| Upgrade | `tests/upgrade_test.php::test_upgrade_from_040` | batch id column and index, existing rows kept, `selectionttl`, idempotent |
+| Load | `tests/integration/grades_large_data_test.php` (extended) | 100 000 journal rows, 1 000 mappings, 100 000 observations: filtered diagnosis, 500-row rows section (read budget), 500-row journal section (<= 30 reads), every-match refusal, evidence page (<= 3 reads) |
+| Behat | `tests/behat/ux.feature` (14) | menu en/de (minimal German pack fixture), single-capability entries, German tab order and labels, back link, grade rows with names and counters, pseudonyms without the right, bulk replay, connection diagnosis with 405, completion absent, history, support with and without connection rights, audit |
+| Playwright two-site | `tests/playwright/ux_two_site.spec.js` (10) in `playwright.channels.config.js` | AJAX paging with history/back/forward/reload and 500 rows, non-JS counters = filtered totals, journal of one row, read-only views never POST, bulk replay with double submit at the real consumer, scope bar, support journey and audit, completion present, viewer without names, axe (WCAG 2.1 A/AA, serious and critical) and screenshots of 11 views in en and de (`SCREEN_DIR`) |
+
+The two-site runner used locally (`/home/claude/e2e/run_pw2.sh <config> [spec]`) restores both sites from their 0.4.0
+snapshots, copies the plugin and local_lticompletionsync into the trees, runs the upgrade (so every run also proves the
+0.4.0 -> 0.5.0 upgrade on real data) and then Playwright. `@axe-core/playwright` is required for the UX spec.
+
 MariaDB locally: `LTIDIAG_DB=mariadb` in the 4.5 tree's `config.php` switches PHPUnit to a MariaDB 10.11 database
 (`php admin/tool/phpunit/cli/init.php`, then `vendor/bin/phpunit --testsuite tool_ltidiagnostics_testsuite`).
 

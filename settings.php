@@ -24,14 +24,18 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-if (
-    $hassiteconfig || has_capability('tool/ltidiagnostics:view', context_system::instance())
-        || has_capability('tool/ltidiagnostics:viewsupport', context_system::instance())
-) {
-    // Moodle 4.5 creates the 'tools' category only for users with moodle/site:config (5.x always), so a delegated
-    // viewer would otherwise get no admin tree entry and "Access denied" from admin_externalpage_setup().
+if ($hassiteconfig || \tool_ltidiagnostics\local\admin_access::any()) {
+    // Moodle 4.5 creates the 'tools' category ("Plugins > Admin tools" / "Plugins > Dienstprogramme") only for users with
+    // moodle/site:config (5.x always), so a delegated user would otherwise get no admin tree entry and "Access denied"
+    // from admin_externalpage_setup(). The category is added exactly once, below 'tools' when it exists, else at the
+    // root of the site administration.
     $toolsparent = $ADMIN->locate('tools') ? 'tools' : 'root';
-    $ADMIN->add($toolsparent, new admin_category('tool_ltidiagnostics_category', get_string('pluginname', 'tool_ltidiagnostics')));
+    if (!$ADMIN->locate('tool_ltidiagnostics_category')) {
+        $ADMIN->add($toolsparent, new admin_category(
+            'tool_ltidiagnostics_category',
+            get_string('pluginname', 'tool_ltidiagnostics')
+        ));
+    }
 
     $ADMIN->add('tool_ltidiagnostics_category', new admin_externalpage(
         'tool_ltidiagnostics_index',
@@ -161,7 +165,8 @@ if (
         ));
         foreach (
             ['repairbatchmax' => [20, 1, 100], 'repairratelimit' => [30, 1, 500], 'repairmaxattempts' => [4, 1, 10],
-                'repairbackoff' => [300, 30, 86400], 'retentiongradedays' => [365, 1, 3650]] as $name => [$default, $min, $max]
+                'repairbackoff' => [300, 30, 86400], 'retentiongradedays' => [365, 1, 3650],
+                'selectionttl' => [900, 60, 3600]] as $name => [$default, $min, $max]
         ) {
             $settings->add(new admin_setting_configtext_with_maxlength(
                 'tool_ltidiagnostics/' . $name,

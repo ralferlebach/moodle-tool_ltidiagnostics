@@ -50,15 +50,9 @@ $conn = (new inventory())->get_connection($key);
 if ($conn === null) {
     throw new \moodle_exception('invalidconnection', 'tool_ltidiagnostics');
 }
-$filters = ['courseid' => optional_param('courseid', 0, PARAM_INT), 'cmid' => optional_param('cmid', 0, PARAM_INT), 'from' => 0,
-    'to' => 0];
-foreach (['from', 'to'] as $name) {
-    // An empty value must stay "no limit": strtotime(' UTC') is the current time, which made every export before 0.3.0
-    // evaluate an empty window [now, now].
-    $text = trim(optional_param($name, '', PARAM_TEXT));
-    $time = $text !== '' ? strtotime($text . ' UTC') : false;
-    $filters[$name] = $time ? (int) $time : 0;
-}
+// The same scope as the view (issue #13): calendar days in the viewer's time zone, the end day included; an empty value
+// stays "no limit".
+$filters = \tool_ltidiagnostics\local\scope::from_request()->filters();
 $now = time();
 $reveal = diagnostic_mode::can_reveal();
 $result = (new health_check())->run($conn, $now, [

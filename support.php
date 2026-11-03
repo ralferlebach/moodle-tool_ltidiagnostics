@@ -15,7 +15,12 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Support view: pseudonymised diagnostic ids and an error summary without identifiers.
+ * Support view (issues #15, #27): connections by readable name, local id and diagnostic id, their most urgent finding
+ * and next safe step, and the way from a ticket to the connection, the person, the grade journal and the audit - each
+ * link only for users who may open its target.
+ *
+ * Identities are graded by capability, not by role name: viewsupport shows connection identities (LTI configuration of
+ * this site), viewidentities additionally learners' names. Pseudonyms stay for documents that leave the site.
  *
  * @package    tool_ltidiagnostics
  * @copyright  2026 Ralf Erlebach
@@ -25,61 +30,204 @@
 require_once(__DIR__ . '/../../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 
+use tool_ltidiagnostics\local\connection;
 use tool_ltidiagnostics\local\health_check;
+use tool_ltidiagnostics\local\identity;
 use tool_ltidiagnostics\local\inventory;
+use tool_ltidiagnostics\local\navigation;
 use tool_ltidiagnostics\local\profile_manager;
 use tool_ltidiagnostics\local\snapshot;
 use tool_ltidiagnostics\local\support;
 
-$id = optional_param('id', '', PARAM_ALPHANUMEXT);
-$url = new moodle_url('/admin/tool/ltidiagnostics/support.php', ['id' => $id]);
+$key = optional_param('key', '', PARAM_RAW);
+$search = trim(optional_param('search', '', PARAM_TEXT));
+$offset = max(0, optional_param('offset', 0, PARAM_INT));
+$url = new moodle_url('/admin/tool/ltidiagnostics/support.php', array_filter(['key' => $key, 'search' => $search,
+    'offset' => $offset]));
 admin_externalpage_setup('tool_ltidiagnostics_support', '', null, $url);
 $context = context_system::instance();
 require_capability('tool/ltidiagnostics:viewsupport', $context);
+$canview = has_capability('tool/ltidiagnostics:view', $context);
+$canprivacy = has_capability('tool/ltidiagnostics:viewprivacy', $context);
+$cannames = identity::can_see_names();
+$t = fn(string $id, $a = null): string => get_string($id, 'tool_ltidiagnostics', $a);
+
+/**
+ * Most urgent finding of a connection and its next step.
+ *
+ * @param connection $c Connection.
+ * @return array light, title, fix, code, layer
+ */
+function tool_ltidiagnostics_support_case(connection $c): array {
+    $result = (new health_check())->run($c, time(), ['profile' => profile_manager::get($c->key),
+        'probes' => snapshot::latest_probes($c->key)]);
+    $f = $result['rootcause'];
+    if ($f === null) {
+        foreach ($result['findings'] as $candidate) {
+            if (in_array($candidate->severity, ['blocking', 'warning'], true)) {
+                $f = $candidate;
+                break;
+            }
+        }
+    }
+    if ($f === null) {
+        return ['light' => 'green', 'title' => get_string('support_nofinding', 'tool_ltidiagnostics'), 'fix' => '',
+            'code' => '', 'layer' => '', 'result' => $result];
+    }
+    $str = $f->strings();
+    return ['light' => $f->severity === 'blocking' ? 'red' : 'amber', 'title' => $str['title'], 'fix' => $str['fix'],
+        'code' => $f->code, 'layer' => $f->layer, 'result' => $result];
+}
 
 $output = $PAGE->get_renderer('tool_ltidiagnostics');
 echo $output->header();
+echo navigation::back_link();
 echo $output->heading(get_string('support', 'tool_ltidiagnostics'));
-echo html_writer::tag('p', get_string('support_desc', 'tool_ltidiagnostics'));
-$connections = (new inventory())->get_connections();
-$items = '';
-foreach ($connections as $c) {
-    $diag = support::diagnostic_id($c->key);
-    $items .= html_writer::tag('li', html_writer::link(new moodle_url($url, ['id' => $diag]), $diag) . ' (' .
-        get_string('role_' . $c->role, 'tool_ltidiagnostics') . ')');
-}
-echo html_writer::tag('ul', $items);
-foreach ($connections as $c) {
-    if ($id === '' || support::diagnostic_id($c->key) !== $id) {
-        continue;
+echo html_writer::tag('p', $t('support_desc2'));
+
+if ($key !== '') {
+    // Detail of one case.
+    $c = connection::parse_key($key) !== null ? (new inventory())->get_connection($key) : null;
+    if (!$c) {
+        throw new \moodle_exception('invalidconnection', 'tool_ltidiagnostics');
     }
     \tool_ltidiagnostics\local\audit::log('view_support', $c->key);
-    $result = (new health_check())->run($c, time(), ['profile' => profile_manager::get($c->key),
-        'probes' => snapshot::latest_probes($c->key)]);
-    $summary = support::summary($c->key, $result);
-    echo $output->heading($summary['diagnosticid'], 3);
+    $case = tool_ltidiagnostics_support_case($c);
+    echo html_writer::link(
+        new moodle_url('/admin/tool/ltidiagnostics/support.php', array_filter(['search' => $search])),
+        $t('support_backtolist'),
+        ['class' => 'd-block mb-2', 'id' => 'tool_ltidiagnostics_support_back']
+    );
+    echo $output->heading(s(navigation::label($c)), 3, '', 'tool_ltidiagnostics_support_case');
+    echo html_writer::tag('p', $t('support_caseline', (object) ['role' => $t('role_' . $c->role),
+        'id' => support::diagnostic_id($c->key)]));
+    // Ticket journey: connection -> course/activity -> person -> attempt -> evidence -> next step.
+    $steps = [];
+    $steps[] = $t('support_step_finding', (object) ['title' => $case['title'], 'fix' => $case['fix'] ?: '-']);
+    if ($canview) {
+        $steps[] = html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $c->key,
+            'tab' => 'health']), $t('support_go_diagnosis'));
+        $steps[] = html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $c->key,
+            'tab' => 'matrix']), $t('support_go_connection'));
+        if ($c->role === connection::ROLE_TOOL) {
+            $steps[] = html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $c->key,
+                'tab' => 'grades'], 'tool_ltidiagnostics_journal'), $t('support_go_journal'));
+        }
+        $steps[] = html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $c->key,
+            'tab' => 'evidence']), $t('support_go_evidence'));
+    }
+    if ($canprivacy) {
+        $steps[] = html_writer::link(
+            new moodle_url('/admin/tool/ltidiagnostics/audit.php', ['connkey' => $c->key]),
+            $t('support_go_audit')
+        );
+    }
+    echo html_writer::tag(
+        'ol',
+        implode('', array_map(fn($s) => html_writer::tag('li', $s), $steps)),
+        ['id' => 'tool_ltidiagnostics_support_journey']
+    );
+    if ($canview && $cannames && $c->role === connection::ROLE_TOOL) {
+        // Person search: names are personal data, only with viewidentities; the search runs on the grade tab's filter.
+        $form = html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'key', 'value' => $c->key])
+            . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab', 'value' => 'grades'])
+            . html_writer::label($t('support_person'), 'id_support_person', false, ['class' => 'mr-1 me-1'])
+            . html_writer::empty_tag('input', ['type' => 'search', 'name' => 'fsearch', 'id' => 'id_support_person',
+                'class' => 'form-control d-inline-block w-auto mr-1 me-1'])
+            . html_writer::tag('button', $t('support_person_find'), ['type' => 'submit', 'class' => 'btn btn-secondary']);
+        echo html_writer::tag('form', $form, ['method' => 'get', 'action' => (new moodle_url(
+            '/admin/tool/ltidiagnostics/connection.php'
+        ))->out_omit_querystring(), 'class' => 'mb-3', 'role' => 'search', 'id' => 'tool_ltidiagnostics_support_person']);
+    }
+    $summary = support::summary($c->key, $case['result']);
     $table = new html_table();
+    $table->id = 'tool_ltidiagnostics_support_layers';
     $table->attributes['class'] = 'generaltable table-sm';
-    $table->caption = get_string('layers', 'tool_ltidiagnostics');
-    $table->head = [get_string('layer', 'tool_ltidiagnostics'), get_string('status', 'tool_ltidiagnostics')];
+    $table->caption = $t('layers');
+    $table->head = [$t('layer'), $t('status')];
     foreach ($summary['layers'] as $layer => $light) {
-        $table->data[] = [get_string('layer_' . $layer, 'tool_ltidiagnostics'), get_string(
-            'light_' . $light,
-            'tool_ltidiagnostics'
-        )];
+        $h = new html_table_cell($t('layer_' . $layer));
+        $h->header = true;
+        $h->scope = 'row';
+        $table->data[] = new html_table_row([$h, $t('light_' . $light)]);
     }
-    echo html_writer::table($table);
+    echo html_writer::div(html_writer::table($table), 'table-responsive');
     $table = new html_table();
+    $table->id = 'tool_ltidiagnostics_support_findings';
     $table->attributes['class'] = 'generaltable table-sm';
-    $table->caption = get_string('hc_findings', 'tool_ltidiagnostics');
-    $table->head = [get_string('severity', 'tool_ltidiagnostics'), get_string('layer', 'tool_ltidiagnostics'),
-        get_string('code', 'tool_ltidiagnostics')];
-    foreach ($summary['findings'] as $f) {
-        $table->data[] = [get_string('severity_' . $f['severity'], 'tool_ltidiagnostics'), get_string(
-            'layer_' . $f['layer'],
-            'tool_ltidiagnostics'
-        ), s($f['code'])];
+    $table->caption = $t('hc_findings');
+    $table->head = [$t('severity'), $t('layer'), $t('diag_cause'), $t('nextstep'), $t('code')];
+    foreach ($case['result']['findings'] as $f) {
+        if (!in_array($f->severity, ['blocking', 'warning'], true)) {
+            continue;
+        }
+        $str = $f->strings();
+        $h = new html_table_cell($t('severity_' . $f->severity));
+        $h->header = true;
+        $h->scope = 'row';
+        $table->data[] = new html_table_row([$h, $t('layer_' . $f->layer), s($str['title']), s($str['fix']),
+            html_writer::tag('code', s($f->code))]);
     }
-    echo html_writer::table($table);
+    echo $table->data ? html_writer::div(html_writer::table($table), 'table-responsive')
+        : html_writer::tag('p', $t('support_nofinding'), ['class' => 'alert alert-success']);
+    echo $output->footer();
+    die;
 }
+
+// List of cases: search by name, local id or diagnostic id; ten per page (each case runs the connection diagnosis).
+$form = html_writer::label($t('support_search'), 'id_support_search', false, ['class' => 'mr-1 me-1'])
+    . html_writer::empty_tag('input', ['type' => 'search', 'name' => 'search', 'id' => 'id_support_search',
+        'value' => $search, 'class' => 'form-control d-inline-block w-auto mr-1 me-1'])
+    . html_writer::tag('button', $t('filter'), ['type' => 'submit', 'class' => 'btn btn-secondary']);
+echo html_writer::tag('form', $form, ['method' => 'get', 'action' => $url->out_omit_querystring(), 'class' => 'mb-3',
+    'role' => 'search']);
+$connections = (new inventory())->get_connections();
+if ($search !== '') {
+    $needle = core_text::strtolower($search);
+    $connections = array_values(array_filter($connections, function (connection $c) use ($needle) {
+        return strpos(core_text::strtolower(navigation::label($c)), $needle) !== false
+            || strpos(core_text::strtolower(support::diagnostic_id($c->key)), $needle) !== false
+            || strpos(core_text::strtolower($c->issuer), $needle) !== false;
+    }));
+}
+$total = count($connections);
+$perpage = 10;
+$page = array_slice($connections, $offset, $perpage);
+$table = new html_table();
+$table->id = 'tool_ltidiagnostics_support_cases';
+$table->attributes['class'] = 'generaltable table-sm';
+$table->caption = $t('support_cases');
+$table->head = [$t('connection'), $t('role'), $t('support_diagid'), $t('support_lastfinding'), $t('nextstep'),
+    $t('actions')];
+foreach ($page as $c) {
+    $case = tool_ltidiagnostics_support_case($c);
+    $h = new html_table_cell(s(navigation::label($c)));
+    $h->header = true;
+    $h->scope = 'row';
+    $caseurl = new moodle_url('/admin/tool/ltidiagnostics/support.php', array_filter(['key' => $c->key, 'search' => $search]));
+    $actions = [html_writer::link($caseurl, $t('support_case'), ['aria-label' => $t('support_open_case', $c->name)])];
+    if ($canview) {
+        $actions[] = html_writer::link(
+            new moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $c->key]),
+            $t('open'),
+            ['aria-label' => $t('open_for', $c->name)]
+        );
+    }
+    $row = new html_table_row([$h, $t('role_' . $c->role), html_writer::tag('code', support::diagnostic_id($c->key)),
+        html_writer::span($case['title'], 'badge ' . \tool_ltidiagnostics\output\renderer::badge_class($case['light'])),
+        s($case['fix'] ?: '-'), implode(html_writer::empty_tag('br'), $actions)]);
+    $row->attributes['data-key'] = $c->key;
+    $row->attributes['data-code'] = $case['code'];
+    $table->data[] = $row;
+}
+echo $table->data ? html_writer::div(html_writer::table($table), 'table-responsive')
+    : html_writer::tag('p', $t('noconnections'), ['class' => 'alert alert-info']);
+echo $PAGE->get_renderer('tool_ltidiagnostics', 'grades')->offset_pager(
+    $url,
+    array_filter(['search' => $search]),
+    'offset',
+    $offset,
+    $perpage,
+    $total
+);
 echo $output->footer();

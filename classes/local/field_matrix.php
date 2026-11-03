@@ -43,6 +43,17 @@ class field_matrix {
         'custom_id' => 'custom',
     ];
 
+    /** @var string[] Requirement of each claim in an LTI 1.3 resource link launch: required, optional or service (needed
+     * only when the service is used). */
+    public const REQUIREMENT = [
+        'iss' => 'required', 'aud' => 'required', 'sub' => 'required', 'deployment_id' => 'required', 'nonce' => 'required',
+        'message_type' => 'required', 'version' => 'required', 'target_link_uri' => 'required', 'resource_link' => 'required',
+        'roles' => 'required', 'context' => 'optional', 'given_name' => 'optional', 'family_name' => 'optional',
+        'email' => 'optional', 'lis' => 'optional', 'ags_endpoint' => 'service', 'ags_scope_score' => 'service',
+        'nrps_endpoint' => 'service', 'launch_presentation' => 'optional', 'tool_platform' => 'optional',
+        'custom_id' => 'service',
+    ];
+
     /** @var string[] States meaning "the claim travels". */
     private const SENT = ['always', 'yes', 'validated', 'present'];
 

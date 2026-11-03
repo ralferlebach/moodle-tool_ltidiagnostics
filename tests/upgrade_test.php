@@ -99,20 +99,20 @@ final class upgrade_test extends \advanced_testcase {
     }
 
     /**
-     * Release metadata says 0.4.0 and the Moodle version is newer than the 0.1.0 build.
+     * Release metadata says 0.5.0 and the Moodle version is newer than the 0.1.0 build.
      */
     public function test_version_metadata(): void {
         global $CFG;
         $plugin = new \stdClass();
         require($CFG->dirroot . '/admin/tool/ltidiagnostics/version.php');
-        $this->assertSame('0.4.0', $plugin->release);
+        $this->assertSame('0.5.0', $plugin->release);
         $this->assertSame('tool_ltidiagnostics', $plugin->component);
         $this->assertGreaterThan(self::V010, $plugin->version);
-        $this->assertSame(2026110200, $plugin->version);
+        $this->assertSame(2026110300, $plugin->version);
         $this->assertSame(MATURITY_ALPHA, $plugin->maturity);
         $this->assertSame([405, 503], $plugin->supported);
         $info = \core_plugin_manager::instance()->get_plugin_info('tool_ltidiagnostics');
-        $this->assertSame('0.4.0', $info->release);
+        $this->assertSame('0.5.0', $info->release);
     }
 
     /**
@@ -402,6 +402,53 @@ final class upgrade_test extends \advanced_testcase {
             $this->assertSame(1, $DB->count_records('tool_ltidiagnostics_gatt'));
         } finally {
             tool_ltidiagnostics_create_missing_tables($dbman);
+        }
+    }
+
+    /**
+     * Step 2026110300 (release 0.5.0, bulk replay): the journal gets the batch id with its index, existing rows keep
+     * their data with an empty batch id, the selection lifetime gets its default, and a second run changes nothing.
+     */
+    public function test_upgrade_from_040(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $dbman = $DB->get_manager();
+        $table = new \xmldb_table('tool_ltidiagnostics_gatt');
+        $field = new \xmldb_field('batchid');
+        $index = new \xmldb_index('batchid', XMLDB_INDEX_NOTUNIQUE, ['batchid']);
+        $row = \tool_ltidiagnostics\local\grades\journal::insert(['connkey' => 'tool:1:1', 'state' => 'queued']);
+        if ($dbman->index_exists($table, $index)) {
+            $dbman->drop_index($table, $index);
+        }
+        $dbman->drop_field($table, $field);
+        unset_config('selectionttl', 'tool_ltidiagnostics');
+        try {
+            $this->become_010();
+            set_config('version', 2026110200, 'tool_ltidiagnostics');
+            $this->assertTrue($this->upgrade(2026110200));
+            $this->assertTrue($dbman->field_exists($table, $field));
+            $this->assertTrue($dbman->index_exists($table, $index));
+            $this->assertSame('', (string) $DB->get_field('tool_ltidiagnostics_gatt', 'batchid', ['id' => $row->id]));
+            $this->assertSame('queued', (string) $DB->get_field('tool_ltidiagnostics_gatt', 'state', ['id' => $row->id]));
+            $this->assertSame('900', get_config('tool_ltidiagnostics', 'selectionttl'));
+            set_config('selectionttl', 120, 'tool_ltidiagnostics');
+            set_config('version', 2026110200, 'tool_ltidiagnostics');
+            $this->assertTrue($this->upgrade(2026110200), 'second run');
+            $this->assertSame('120', get_config('tool_ltidiagnostics', 'selectionttl'), 'An existing setting is kept.');
+        } finally {
+            tool_ltidiagnostics_create_missing_tables($dbman);
+            if (!$dbman->field_exists($table, $field)) {
+                $dbman->add_field($table, new \xmldb_field(
+                    'batchid',
+                    XMLDB_TYPE_CHAR,
+                    '36',
+                    null,
+                    XMLDB_NOTNULL,
+                    null,
+                    null,
+                    'purpose'
+                ));
+            }
         }
     }
 }

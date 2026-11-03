@@ -92,6 +92,13 @@ $capabilities = [
         'riskbitmask' => RISK_PERSONAL,
         'archetypes' => [],
     ],
+    // Learners' full names in the internal diagnosis (personal data, purpose bound; issues #15, #21, #27).
+    'tool/ltidiagnostics:viewidentities' => [
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'riskbitmask' => RISK_PERSONAL,
+        'archetypes' => [],
+    ],
     // Active grade replay to one consumer (needs the site setting and the opt-in of the connection as well).
     'tool/ltidiagnostics:repairgrades' => [
         'captype' => 'write',

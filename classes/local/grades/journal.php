@@ -62,7 +62,7 @@ class journal {
     public const ORIGIN_RETRY = 'replay_retry';
 
     /** @var int Maximum page size. */
-    public const MAXPAGE = 200;
+    public const MAXPAGE = 500;
 
     /**
      * A new attempt id.
@@ -137,6 +137,7 @@ class journal {
             'bookingcheckedat' => 0,
             'operatorid' => 0,
             'purpose' => '',
+            'batchid' => '',
             'timecreated' => $now,
             'timemodified' => $now,
         ], $data);
@@ -202,20 +203,8 @@ class journal {
     public static function page(string $connkey, array $filters = []): array {
         global $DB;
         $limit = max(1, min(self::MAXPAGE, (int) ($filters['limit'] ?? 50)));
-        $where = 'connkey = :connkey';
-        $params = ['connkey' => $connkey];
-        foreach (['resourcelinkrowid', 'userid'] as $f) {
-            if (!empty($filters[$f])) {
-                $where .= " AND $f = :$f";
-                $params[$f] = (int) $filters[$f];
-            }
-        }
-        foreach (['source', 'state'] as $f) {
-            if (!empty($filters[$f])) {
-                $where .= " AND $f = :$f";
-                $params[$f] = (string) $filters[$f];
-            }
-        }
+        [$where, $params] = self::where($connkey, $filters);
+        $total = (int) $DB->count_records_select(self::TABLE, $where, $params);
         if (!empty($filters['before'])) {
             $where .= ' AND id < :before';
             $params['before'] = (int) $filters['before'];
@@ -226,8 +215,78 @@ class journal {
             array_pop($rows);
             $next = (int) end($rows)->id;
         }
-        return ['rows' => $rows, 'next' => $next];
+        return ['rows' => $rows, 'next' => $next, 'total' => $total];
     }
+
+    /**
+     * WHERE clause of the journal filters (issue #23). Every value is typed here; unknown values are ignored.
+     *
+     * @param string $connkey Connection key.
+     * @param array $filters resourcelinkrowid, userid, source, state (single state), transfer (class), origin (core,
+     *     replay), from, to (timestamps), toolids (int[]: scope; empty array = nothing), attribution (attributed,
+     *     unattributed), batchid.
+     * @return array [where, params]
+     */
+    public static function where(string $connkey, array $filters): array {
+        global $DB;
+        $where = 'connkey = :connkey';
+        $params = ['connkey' => $connkey];
+        foreach (['resourcelinkrowid', 'userid'] as $f) {
+            if (!empty($filters[$f])) {
+                $where .= " AND $f = :$f";
+                $params[$f] = (int) $filters[$f];
+            }
+        }
+        foreach (['source', 'state', 'batchid'] as $f) {
+            if (!empty($filters[$f])) {
+                $where .= " AND $f = :$f";
+                $params[$f] = (string) $filters[$f];
+            }
+        }
+        $classes = ['skipped' => ['skipped'], 'pending' => ['eligible', 'queued', 'sending', 'retry_wait'],
+            'accepted' => ['http_accepted'], 'failed' => ['http_rejected', 'dead', 'aborted']];
+        if (!empty($filters['transfer']) && isset($classes[$filters['transfer']])) {
+            [$s, $p] = $DB->get_in_or_equal($classes[$filters['transfer']], SQL_PARAMS_NAMED, 'jtr');
+            $where .= " AND state $s";
+            $params += $p;
+        }
+        if (($filters['origin'] ?? '') === 'core') {
+            $where .= ' AND origin = :ocore';
+            $params['ocore'] = self::ORIGIN_CORE;
+        } else if (($filters['origin'] ?? '') === 'replay') {
+            [$s, $p] = $DB->get_in_or_equal(
+                [self::ORIGIN_REPLAY, self::ORIGIN_BATCH, self::ORIGIN_RETRY],
+                SQL_PARAMS_NAMED,
+                'jor'
+            );
+            $where .= " AND origin $s";
+            $params += $p;
+        }
+        if (!empty($filters['from'])) {
+            $where .= ' AND timecreated >= :jfrom';
+            $params['jfrom'] = (int) $filters['from'];
+        }
+        if (!empty($filters['to'])) {
+            $where .= ' AND timecreated <= :jto';
+            $params['jto'] = (int) $filters['to'];
+        }
+        if (array_key_exists('toolids', $filters) && is_array($filters['toolids'])) {
+            if (!$filters['toolids']) {
+                $where .= ' AND 1 = 0';
+            } else {
+                [$s, $p] = $DB->get_in_or_equal(array_map('intval', $filters['toolids']), SQL_PARAMS_NAMED, 'jtool');
+                $where .= " AND toolid $s";
+                $params += $p;
+            }
+        }
+        if (($filters['attribution'] ?? '') === 'attributed') {
+            $where .= ' AND resourcelinkrowid > 0';
+        } else if (($filters['attribution'] ?? '') === 'unattributed') {
+            $where .= ' AND resourcelinkrowid = 0';
+        }
+        return [$where, $params];
+    }
+
 
     /**
      * Rows by id, in chunks (bounded statements for any number of ids).

@@ -49,6 +49,7 @@ class config {
         'graderepair' => 0,
         'graderepairconnections' => '',
         'repairbatchmax' => 20,
+        'selectionttl' => 900,
         'repairratelimit' => 30,
         'repairmaxattempts' => 4,
         'repairbackoff' => 300,
@@ -59,6 +60,7 @@ class config {
     /** @var array Bounds of numeric grade channel settings: name => [min, max]. */
     public const BOUNDS = [
         'repairbatchmax' => [1, 100],
+        'selectionttl' => [60, 3600],
         'repairratelimit' => [1, 500],
         'repairmaxattempts' => [1, 10],
         'repairbackoff' => [30, 86400],

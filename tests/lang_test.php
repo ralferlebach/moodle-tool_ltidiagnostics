@@ -146,8 +146,10 @@ final class lang_test extends \advanced_testcase {
             $codes[] = 'probe_' . $code;
         }
         // Codes that health_check builds from a loop.
-        $codes = array_merge($codes, ['priv_send_name', 'priv_send_email', 'skew_blocking', 'skew_warn']);
-        $codes = array_unique(array_diff($codes, ['skew_', 'probe_', 'tls_handshake']));
+        $codes = array_merge($codes, ['priv_send_name', 'priv_send_email', 'skew_blocking', 'skew_warn',
+            'probe_get_not_allowed', 'probe_contradicted']);
+        // Service keys of the per-service rating (issue #20) share the prefix but are no finding codes.
+        $codes = array_unique(array_diff($codes, ['skew_', 'probe_', 'tls_handshake', 'jwks_probe']));
         $this->assertGreaterThan(70, count($codes));
         foreach ($codes as $code) {
             foreach (['title', 'detail', 'fix'] as $part) {
@@ -200,6 +202,12 @@ final class lang_test extends \advanced_testcase {
                 }
                 if (!isset($en[$hit[1]]) || !isset($de[$hit[1]])) {
                     $missing[] = $hit[1] . ' in ' . basename($file);
+                }
+            }
+            preg_match_all("/(?:\\\$t|self::t)\(\s*'([a-z0-9_:]+)'\s*[,)]/", $text, $short);
+            foreach ($short[1] as $id) {
+                if (!isset($en[$id]) || !isset($de[$id])) {
+                    $missing[] = $id . ' (short form in ' . basename($file) . ')';
                 }
             }
             preg_match_all("/\{\{#str\}\}\s*([a-z0-9_]+)\s*,\s*tool_ltidiagnostics/", $text, $t);
@@ -371,6 +379,98 @@ final class lang_test extends \advanced_testcase {
             $this->assertArrayHasKey($id, $en, $id);
             $this->assertArrayHasKey($id, $de, $id);
         }
+    }
+
+    /**
+     * Reviewed negative list of the i18n scan (issue #11): literals in output code that are not user text. Each entry
+     * is a regular expression of the whole literal and the reason it is not translated.
+     *
+     * @return string[] Pattern => reason.
+     */
+    private static function i18n_allowed(): array {
+        return [
+            '/^ ?UTC$/' => 'time zone abbreviation next to UTC times (ISO, identical in all languages)',
+            '/^(GET|POST)$/' => 'HTTP method name (protocol term)',
+            '/^Ymd-His$/' => 'date format of export file names',
+            '/^ ?&(middot|rarr|nbsp);? ?$/' => 'HTML entity used as separator',
+            '/^pairs\[\]$/' => 'form field name',
+            '/^[a-z_]+=$/' => 'machine readable audit detail key',
+            '/^ ?,?[a-z_]+=$/' => 'machine readable audit detail key',
+            '/^ (queued|refused)=$/' => 'machine readable audit detail key',
+            '/^identifiers=(revealed|masked)$/' => 'machine readable audit detail',
+            '/^MOODLE_INTERNAL$/' => 'constant name',
+            '/^id, timecreated, contenthash$/' => 'SQL field list',
+            '/^[a-z]+ (ASC|DESC)(, [a-z]+ (ASC|DESC))*$/' => 'SQL sort clause',
+            '#^/.*/[a-z]*$#' => 'regular expression',
+        ];
+    }
+
+    /**
+     * Literals of the output code (pages, renderers, forms, templates) that look like natural language must come from
+     * the language files; the scan reads PHP tokens, so comments and identifiers are not counted (issue #11).
+     */
+    public function test_i18n_scan_of_output_code(): void {
+        $root = realpath(__DIR__ . '/..');
+        // The descriptions of external functions are developer documentation, which Moodle keeps in English.
+        $files = array_merge(glob($root . '/*.php'), glob($root . '/classes/output/*.php'), glob($root . '/classes/form/*.php'));
+        $this->assertGreaterThan(20, count($files));
+        $allowed = self::i18n_allowed();
+        $offenders = [];
+        foreach ($files as $file) {
+            foreach (token_get_all(file_get_contents($file)) as $token) {
+                if (!is_array($token) || $token[0] !== T_CONSTANT_ENCAPSED_STRING) {
+                    continue;
+                }
+                $value = substr($token[1], 1, -1);
+                if (!preg_match('/\p{L}{2,}/u', $value) || preg_match('/^[a-z0-9_\-\.\/:#\[\]]+$/', $value)) {
+                    continue;
+                }
+                if (preg_match('/^[a-z0-9_\- ]+$/', $value) && !preg_match('/\b(the|and|not|for|with|from)\b/', $value)) {
+                    // CSS class lists and similar identifier lists.
+                    continue;
+                }
+                if (preg_match('/\b(SELECT|FROM|WHERE|JOIN|COUNT|ORDER BY|GROUP BY)\b/', $value)) {
+                    continue;
+                }
+                foreach (array_keys($allowed) as $pattern) {
+                    if (preg_match($pattern, $value)) {
+                        continue 2;
+                    }
+                }
+                $offenders[] = basename($file) . ':' . $token[2] . ' ' . $value;
+            }
+        }
+        $this->assertSame([], $offenders, 'Hard-coded visible text; use a language string or add a reviewed exception.');
+        // Templates: text outside mustache tags and HTML tags.
+        foreach (glob($root . '/templates/*.mustache') as $file) {
+            $text = file_get_contents($file);
+            $text = preg_replace('/\{\{!.*?\}\}/s', '', $text);
+            $text = preg_replace('/\{\{\{?[^}]*\}?\}\}/s', ' ', $text);
+            $text = preg_replace('/<[^>]*>/s', ' ', $text);
+            $text = preg_replace('/&[a-z]+;/', ' ', $text);
+            $this->assertDoesNotMatchRegularExpression('/\p{L}{3,}/u', $text, basename($file) . ' contains literal text.');
+        }
+        // The concrete findings of the audit are gone.
+        $grades = file_get_contents($root . '/classes/output/grades_renderer.php');
+        $this->assertStringNotContainsString("'HTTP '", $grades);
+        $this->assertStringNotContainsString("' #'", $grades);
+        $this->assertStringNotContainsString("' (failed)'", file_get_contents($root . '/classes/local/timeline.php'));
+    }
+
+    /**
+     * Machine identifiers stay language independent: export formats, CSV column keys and finding codes are not
+     * translated (issue #11, AK "machine IDs unchanged").
+     */
+    public function test_machine_identifiers_unchanged(): void {
+        $this->assertSame(['json', 'md', 'csv'], local\report_exporter::FORMATS);
+        $en = $this->strings('en');
+        $de = $this->strings('de');
+        $this->assertSame('Funktionscheck', $de['tab_matrix']);
+        $this->assertSame('Verbindungs-Diagnose', $de['tab_health']);
+        $this->assertSame('Function check', $en['tab_matrix']);
+        // Codes in data attributes and exports are keys, never translated text.
+        $renderer = file_get_contents(__DIR__ . '/../classes/output/renderer.php');
+        $this->assertStringContainsString("attributes['data-code'] = \$p['code']", $renderer);
     }
 
     /**

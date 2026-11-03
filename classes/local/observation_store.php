@@ -28,7 +28,7 @@ namespace tool_ltidiagnostics\local;
  */
 class observation_store {
     /** @var string Table name. */
-    private const TABLE = 'tool_ltidiagnostics_obs';
+    public const TABLE = 'tool_ltidiagnostics_obs';
     /** @var string Event type of an observed LTI family transfer event. */
     public const FAMILY_EVENT = 'family_event';
     /** @var string|null Trace id of the current request. */

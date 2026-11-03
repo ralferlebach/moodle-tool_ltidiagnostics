@@ -78,7 +78,7 @@ Feature: Separate grade and completion channels with a guarded grade replay
     And the LTI download should contain "gr_lastgrade_blocks"
     And the LTI download should not contain "learner1"
     And I open the LTI diagnostics tab "completion" of registration "BUW Moodle"
-    And I should see "Completion channel: local_lticompletionsync"
+    And I should see "The completion sync plugin (local_lticompletionsync) is not installed."
 
   Scenario: A dry run is visible without the right, the form is not
     Given the following config values are set as admin:

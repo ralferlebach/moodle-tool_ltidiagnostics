@@ -1,5 +1,6 @@
 /**
- * Playwright configuration of the grade and completion channel suites (issues #3 and #5 to #9): Moodle 4.5 tool on http://localhost,
+ * Playwright configuration of the grade and completion channel suites (issues #3, #5 to #9) and the UX suite
+ * (#10 to #28): Moodle 4.5 tool on http://localhost,
  * Moodle 5.2 platform on http://127.0.0.1:8052, set up by stack/grades_stack.php (see stack/README.md).
  *
  * @module     tool_ltidiagnostics/playwright.channels.config
@@ -15,7 +16,7 @@ process.env.no_proxy = process.env.NO_PROXY;
 
 module.exports = defineConfig({
   testDir: '.',
-  testMatch: /(grades|completion)_two_site\.spec\.js/,
+  testMatch: /(grades|completion|ux)_two_site\.spec\.js/,
   timeout: 240000,
   expect: { timeout: 20000 },
   workers: 1,

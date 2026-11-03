@@ -4,6 +4,71 @@ Status classes (COMMON brief): **CP** code present / **TL** tests executed local
 accepted / **NV** not verified. Nothing is marked CI or FA yet: no CI run happened, and the owner has not accepted anything.
 "TL" means the named test passed on all four tree/database combinations listed below unless stated otherwise.
 
+## Release 0.5.0 / 2026110300 (issues #10 to #28, 2026-11-03)
+
+Evidence classes as above (CP, TL, CI, FA, NV). Nothing is **CI** (no GitHub run by us, no push) or **FA** (owner
+acceptance pending). The mapping of every user story to fixture, tests, target system and artefact is
+`docs/STORY_MATRIX.md`; the binding clarifications of the follow-up order of 2026-11-02 are implemented as follows.
+
+| Clarification | Implementation | Status |
+|---|---|---|
+| 1. No "open work" metric, only defined status dimensions; "not confirmed" is not "to be sent" | counters source grade / newest transfer / booking (`pair_query`), note under the counters, Behat and E2E assert the absence of "Open work" | TL |
+| 2. Capability-graded identities instead of blanket pseudonyms; pseudonyms for external documents; no secrets | `viewsupport`/`view`: connection names, local ids, issuer; `viewidentities`: learners' names with profile links; support package and partner documents unchanged (pseudonymised); no tokens/JWT stored or shown | TL |
+| 3. Without a functioning local_lticompletionsync at most one note, no completion actions; AGS independent | `completion_view::state()`, tab hidden, one note per state, global completion buttons removed | TL |
+| 4. Server-side paging 20/50/100/500; "all" only bounded; bulk only after full target check, rights, confirmation | `sections`, `render_section`, every match bounded by `repairbatchmax`, selection + preview + confirmation + re-verification | TL |
+| 5. Order #20/#22 first, then #12-#15/#21/#23/#27, #18/#19/#25, #24/#26, #28 | followed | CP |
+| 6. Test conditions (#28) | see the runner results below; screen reader and owner acceptance open | TL / NV |
+
+### Per issue
+
+| Issue | AK / DoD item | Status | Evidence |
+|---|---|---|---|
+| #10 | Entry for every single capability, no duplicate or dead node, fallback below root on 4.5 | TL | `navigation_identity_test::test_admin_tree_per_capability` (view, viewsupport, importlogs, viewprivacy), Behat outline (3 roles) |
+| #10 | Pending upgrade does not break the admin tree | TL | `admin_access::any()` skips capabilities that are not installed; upgrade runs of the E2E sites from the 0.4.0 snapshot |
+| #10 | German menu path "Plugins > Dienstprogramme > LTI-Diagnose > LTI-Verbindungen" | TL | Behat (minimal German pack fixture); E2E screenshots with the official German pack |
+| #10 | Delegated users see the *Site administration* menu | CP | core rule: needs `moodle/site:configview` (documented in README); without it pages and quick links work |
+| #11 | No hard-coded visible text; en/de parity; machine ids unchanged | TL | `lang_test` (token scan with reviewed exceptions, parity, placeholders, short-form ids), `render_smoke_test` en/de |
+| #12 | Names with distinct id labels, full issuer for admins, back link with filters, core edit links by capability | TL | `test_labels_and_core_links`, `test_back_link_keeps_filters`, Behat German tabs scenario |
+| #13 | Scope bar for all tabs and exports, chips, reset, time zone, same population for rows/totals/paging/exports | TL | `test_scope_validation`, `pair_query_test`, E2E scope test, export links carry the scope |
+| #13 | Count invariants: empty course, 0, NULL, lastgrade skip, 2xx without consumer evidence, HTTP errors, multiple consumers | TL | `pair_query_test` (4 tests), E2E counters without JavaScript |
+| #14 | Tab names and order, no duplicate headings, service explanations, partner evidence only in the diagnosis | TL | Behat German tabs, `render_smoke_test`, E2E (read-only tabs never POST, partner link only on the diagnosis tab) |
+| #15/#27 | Support by name and ids, no self-links, journey to diagnosis/journal/audit by right | TL | Behat support scenarios (support role without view right, administrator), E2E support journey |
+| #15/#27 | Audit with real names, localised actions, filters, links | TL | `test_audit_page_filters_and_labels`, Behat audit scenario, E2E |
+| #15/#27 | Role matrix incl. teacher of an own course and cross-course/consumer negatives | TL / NV | pages per capability (`access_control_test`), names only with `viewidentities`; the course summary for teachers is the 0.1.0 `viewcourse` page; a ticket journey with three AGS causes on a real BUW system is open |
+| #16 | Target, method, executor, UTC time, addresses, proxy path, code, limits; 405 expected; firewall never a fact | TL | `test_token_endpoint_405_is_expected`, `test_probe_snapshot_keeps_redacted_target`, Behat 405 scenario, wording of `f_probe_firewall_drop_suspected_*` |
+| #17/#24 | Completion without plugin: one note, no buttons, no invented URL; states absent/code only/upgrade/incomplete | TL | `render_smoke_test` (all states), Behat completion scenario; present state: `completion_two_site` (8) |
+| #18 | Ladder with source, time, evidence; how-to; actions read-only vs mutating | TL | matrix template, E2E effect badges (read-only on BUW, "changes data at the partner" only with the replay possible) |
+| #19 | Field requirement, runtime evidence, core validation; filters | TL | `render_smoke_test`, field matrix tests |
+| #20 | Separate ratings; a failed GET is no generic outage; counter-evidence | TL | `test_probe_contradicted_by_real_launch`, `test_ags_and_booking_rated_separately` |
+| #21 | Filters, names by right, 20-500 AJAX with history, screen reader announcement, non-JS, no scores without viewgrades | TL | E2E (paging, back/forward/reload, 500 rows, non-JS, viewer), `grades_large_data_test` (500 rows within the read budget) |
+| #22 | Selection with state/count/scope/TTL, preview of every target, re-verification, one batch, partial failures, 2xx never booked | TL | `test_bulk_selection_and_batch`, Behat bulk scenario, E2E bulk replay with double submit at the real 5.2 consumer |
+| #22 | Load 1 000 / 100 000, parallel sessions | TL / NV | load test (100 000 journal rows, 1 000 mappings, every-match refusal); parallel sessions only through the lock and open-attempt tests |
+| #23 | Journal filters, unattributable core rows, chain, consistent totals, 100 000 rows | TL | `test_server_side_filters`, E2E journal of one row, load test |
+| #25 | Evidence filters, attribution, paging, no tokens, tasks and logs as sub-views | TL | `sections_evidence_test`, load test (100 000 observations) |
+| #26 | History with before/after, baseline, hashes only in technical details | TL | `render_smoke_test` (0, 2 snapshots), Behat history scenario |
+| #28 | Matrix of stories to tests, skipped tests block, negative evidence, performance | TL | `docs/STORY_MATRIX.md`; 0 skipped; deprecation report clean |
+
+### Local runner results 0.5.0 (2026-11-03, PHP 8.3.6, not CI)
+
+| Cell | Command | Result |
+|---|---|---|
+| 4.5 PostgreSQL 16 | `check_ci.sh --behat` (phplint, validate, savepoints, mustache, codechecker 0 warnings, phpdoc 0 warnings, PHPUnit, deprecation report, Behat non-JS) | static OK; `OK (671 tests, 948765 assertions)`; deprecation report clean; Behat 27 scenarios, 27 passed |
+| 4.5 MariaDB 10.11 | `LTIDIAG_DB=mariadb` PHPUnit suite | `OK (671 tests, 948765 assertions)` |
+| 5.2 PostgreSQL 16 (PHPUnit 11) | plugin suite | 671 tests, 0 failures, 0 PHP deprecations, 0 skipped/incomplete/risky; 67 runner deprecations, all docblock metadata (owner rule: PHPUnit 9 convention while 4.5 is supported) |
+| 5.3 PostgreSQL 17 (PHPUnit 11) | plugin suite (Moodle 5.3 requires PostgreSQL 17; installed from the PGDG repository on port 5433) | 671 tests, 0 failures, 0 PHP deprecations, 0 skipped/incomplete/risky; 67 runner deprecations (docblock metadata) |
+| Two-site E2E, 4.5 tool + 5.2 platform | `playwright.channels.config.js` after restoring both sites from their 0.4.0 snapshots and running the upgrade to 0.5.0 | 29 passed (11 grades, 8 completion, 10 UX); axe without serious/critical violations on 11 views in en and de |
+
+Found and fixed by the new tests: nested forms in the grade rows (the selection form wrapped the per-row result check,
+so "Preview marked rows" ran the result check - E2E), one query per row for names and courses in the rows and journal
+sections (539 reads for 500 rows - load test), stored network checks without target and addresses (Behat), a section
+update overwriting the other section's history parameters, `<code>` contrast on striped rows (axe), the per-viewer cache
+of course/activity links (5.3 run). Found by an independent review and fixed: see CHANGELOG 0.5.0.
+
+Not done here: GitHub CI (no push), Behat on 5.x, 5.x with MariaDB (5.3 needs MariaDB 11.4; 10.11 is installed), the
+0.3.0 Playwright specs of the 4.5 <-> 5.3 stack (that stack does not exist here), a screen reader run, the reproduction on
+the productive BUW system, load tests above 100 000 entries, parallel sessions beyond the lock tests. The manual
+acceptance checklist with the screenshots is `docs/acceptance/MANUAL_ACCEPTANCE.md`.
+
 ## Release 0.4.0 / 2026110200 (issues #1 to #9, 2026-11-02)
 
 Evidence classes as above. **TL** here means: executed on this machine in the cells named in "Local runner results

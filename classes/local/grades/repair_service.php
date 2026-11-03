@@ -212,6 +212,7 @@ class repair_service {
                 'state' => 'queued',
                 'operatorid' => $operatorid,
                 'purpose' => $purpose,
+                'batchid' => (string) ($options['batchid'] ?? ''),
                 'timecreated' => $now,
                 'timemodified' => $now,
             ]);

@@ -8,7 +8,7 @@ specified, implemented, enabled, declared, authorised, reachable and really obse
 what an administrator can do next. A feature is only reported as **verified** when a real transaction was observed.
 An enabled checkbox or a reachable endpoint is never enough.
 
-Status: alpha (0.4.0, version 2026110200). See `docs/ACCEPTANCE.md` for what is proven and what is not, and
+Status: alpha (0.5.0, version 2026110300). See `docs/ACCEPTANCE.md` for what is proven and what is not, and
 `docs/GRADES.md` for the grade and completion channels.
 
 
@@ -39,6 +39,8 @@ See http://docs.moodle.org/en/Installing_plugins for details on installing Moodl
 
 Notes:
 
+* Upgrading from 0.4.0 runs step 2026110300: the grade journal gets a batch id column and the lifetime of a bulk
+  selection (`selectionttl`) is added. Nothing existing is changed.
 * Upgrading from 0.3.0 runs step 2026110200: three new tables (grade attempt journal, score state, grade receipts) and
   the grade settings with the replay switched off. Nothing existing is changed.
 * Upgrading from 0.2.x or 0.1.0 runs the upgrade steps up to 2026102700 (two indexes, retention per data class; the
@@ -62,15 +64,32 @@ Branch policy
 Usage & Settings
 ----------------
 
-After installing, open *Site administration > Plugins > Admin tools > LTI Diagnostics > LTI connections*.
+After installing, open *Site administration > Plugins > Admin tools > LTI Diagnostics > LTI connections*
+(German: *Website-Administration > Plugins > Dienstprogramme > LTI-Diagnose > LTI-Verbindungen*).
+
+Users with only some of the plugin's capabilities get exactly the entries of their rights. On Moodle 4.5 the category
+*Admin tools* exists only for `moodle/site:config`; for delegated users the category "LTI Diagnostics" is then placed at
+the top of the site administration. Moodle shows the *Site administration* menu only to users with
+`moodle/site:configview`; give that capability to delegated roles that should use the menu (the pages are reachable by
+URL and through the quick links of the overview without it).
+
+Every page has a link back to the overview with its filters. Above the tabs of a connection a scope bar restricts the
+report to a course, an activity and a period (calendar days in your time zone; times in tables are UTC); tabs that show
+system-wide facts say so. Tables with many rows (grade rows, grade journal, evidence, timeline) have filters and page
+sizes 20, 50, 100 and 500 that load without reloading the page and keep the browser history; everything also works
+without JavaScript.
 
 * **Connection inventory.** Lists the connections of both roles: LTI 1.3 tool types of mod_lti (Moodle as platform)
   and registrations and deployments of enrol_lti (Moodle as tool). Filter by role, text and course.
-* **Capability matrix.** Per connection and per feature (LTI core, AGS, NRPS, Deep Linking, Dynamic Registration,
+* **Function check** (until 0.4.0 "Capability matrix"). Per connection and per feature (LTI core, AGS, NRPS, Deep Linking, Dynamic Registration,
   Platform Storage, ...) the seven steps of the evidence ladder and a status: supported, configured, authorised,
-  verified, blocked, incompatible, not_supported, not_observable, unknown.
-* **Health check.** Compares a desired-state profile (JSON or form) with what is local, declared, authorised and
+  verified, blocked, incompatible, not_supported, not_observable, unknown. Each function says what is checked, how to
+  collect missing evidence and offers drill-down actions marked read-only or "changes data at the partner".
+* **Connection diagnosis** (until 0.4.0 "Health check"). Rates launch, key set, network checks, AGS transport and
+  booking separately and compares a desired-state profile (JSON or form) with what is local, declared, authorised and
   observed, and lists findings by layer (configuration, network, TLS, OIDC/JWT, OAuth2, services, tasks, privacy).
+  Every network check names target, method, executor, UTC time, addresses, proxy path and what it proves; a GET 405 on
+  the POST-only token endpoint is expected, and a failed check contradicted by real launches is never the root cause.
 * **Timeline.** Observed launches, enrolments, group additions, grades, access-log lines, tasks and log events
   side by side. Each row names its source and a correlation confidence (direct, strong, tentative, unmatched).
 * **Active checks.** Optional, off by default, GET only: JWKS, metadata and TLS check of an endpoint, with an SSRF guard.
@@ -96,12 +115,20 @@ After installing, open *Site administration > Plugins > Admin tools > LTI Diagno
   and links to that plugin's own actions with their real reach.
 * **Support package** (0.4.0). Redacted JSON, Markdown or CSV for the partner's administration, split into provider,
   consumer, both and unknown.
+* **Bulk grade replay** (0.5.0). Select marked rows, a page or every match of the filters (at most the batch size), check
+  the preview of every target and confirm once; a batch status page follows the attempts. A selection lives 15 minutes
+  (setting) in the session and can start one batch only.
+* **Support and audit** (0.5.0). Support cases by connection name, local ids and diagnostic id with the most urgent
+  finding, the next step and the way to diagnosis, grade journal and audit (each only with the right). Learners' names
+  need `tool/ltidiagnostics:viewidentities`; documents for external partners stay pseudonymised. The audit shows real
+  names, localised actions and filters for person, kind of action, connection and period.
 
 Settings (*Site administration > Plugins > Admin tools > LTI Diagnostics > Settings*): record events, retention days,
 log allow-list, maximum lines per import, active checks (off by default), allow private targets (off by default),
 exactly allowed private targets, log imports per person and hour, retention of imported lines, audit, snapshots and
 partner data, maximum minutes of the diagnostic mode; grade replay (off by default), result check after a replay,
-batch size, replays per person and hour, attempts, retry delay, retention of the grade journal.
+batch size, replays per person and hour, attempts, retry delay, retention of the grade journal, lifetime of a bulk
+selection.
 
 
 Capabilities
@@ -109,9 +136,9 @@ Capabilities
 
 This plugin introduces these capabilities (none is granted by default except `viewcourse`):
 
-* **tool/ltidiagnostics:view** - Open the connection inventory, matrix, health check and timeline (admin; risk: personal, config).
+* **tool/ltidiagnostics:view** - Open the connection inventory, function check, connection diagnosis and timeline (admin; risk: personal, config).
 * **tool/ltidiagnostics:viewcourse** - Aggregate summary of the LTI activities of a course (editing teacher, manager).
-* **tool/ltidiagnostics:viewsupport** - Pseudonymised support view with a diagnostic ID (support staff).
+* **tool/ltidiagnostics:viewsupport** - Support view: connections by name and local ids, diagnostic ID, most urgent finding and next step (support staff).
 * **tool/ltidiagnostics:viewprivacy** - Audit log of views and exports (privacy officer).
 * **tool/ltidiagnostics:configure** - Switch the diagnostic mode, manage desired-state profiles.
 * **tool/ltidiagnostics:runchecks** - Run the active network checks.
@@ -119,6 +146,7 @@ This plugin introduces these capabilities (none is granted by default except `vi
 * **tool/ltidiagnostics:importlogs** - Import web server logs.
 * **tool/ltidiagnostics:export** - Export reports.
 * **tool/ltidiagnostics:viewgrades** - See score values in the grade diagnosis (0.4.0; risk: personal).
+* **tool/ltidiagnostics:viewidentities** - See learners' names (with profile links) instead of pseudonyms in grade rows, journal and support (0.5.0; risk: personal).
 * **tool/ltidiagnostics:repairgrades** - Replay a grade to a consumer (0.4.0; risks: personal, config, data loss; needs the
   site setting and the opt-in of the connection as well).
 

@@ -1,4 +1,4 @@
-# Grade and completion channels (0.4.0, issues #3 to #9)
+# Grade and completion channels (0.4.0, issues #3 to #9; 0.5.0, issues #13, #21 to #24)
 
 Two separate channels per tool side connection (one enrol_lti registration and deployment):
 
@@ -116,6 +116,29 @@ Separate tabs and workflows for grades and completion; every table has a caption
 Support package (`package.php`, JSON, Markdown, CSV; schema `ltidiag-support-2`): findings split into provider,
 consumer, both and unknown, pseudonyms (`P-` + 8 hex of an HMAC per connection), codes, times, versions, correlation ids;
 no names, user ids, tokens, scores or raw URLs. Audited (`export_support`).
+
+## 7a. Counters, filters and bulk replay (0.5.0, issues #13, #21 to #23)
+
+* **One population.** The rows of a page, the total, the counters and "select every match" come from the same SQL
+  (`local\grades\pair_query`): consumer resource links of the connection inside the scope (course, activity, grade
+  sync on/off), joined with the learner, the source grade (gradebook item of the published activity or course) and the
+  newest journal row of the pair.
+* **Defined counters, no "open work".** Source grade: present (not 0), 0, none (NULL). Newest transfer: not attempted,
+  skipped by core (with its reason in the row), queued or running, accepted by HTTP (2xx), failed. Booking at the
+  consumer: confirmed (AGS result or signed receipt), differs from the source grade, not proven (accepted without
+  consumer evidence), nothing to check (no accepted transfer). Each dimension counts every pair exactly once; the
+  dimensions are not added. "Not proven" never means "to be sent".
+* **Filters** for each counter value, grade sync, link, learner and (with `tool/ltidiagnostics:viewidentities`) name or
+  e-mail; page sizes 20, 50, 100, 500; the grade journal has its own filters (origin core/replay, transfer state,
+  attribution, link and learner of one row, period of the scope).
+* **Bulk replay.** Mark rows, take every row of the page or every match of the filters (refused when there are more than
+  `repairbatchmax`). The selection is stored in the session for `selectionttl` seconds and is bound to the connection;
+  the preview lists every target with consumer link, mapping, source grade and blockers; one confirmation queues one
+  attempt per ready target under one batch id. The selection is consumed before anything is queued, so a double submit
+  or a second confirmation cannot start a second batch. Every target is checked again (`repair_service::request()`:
+  open attempt, blockers, fingerprint of the source grade, rate limit, lock). Failures stay with their target; the
+  batch status page shows each attempt with HTTP status and booking state, and an accepted HTTP request is never shown
+  as booked.
 
 ## 8. Threat model (issue #9)
 

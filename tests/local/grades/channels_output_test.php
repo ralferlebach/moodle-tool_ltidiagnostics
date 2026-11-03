@@ -42,10 +42,11 @@ final class channels_output_test extends \lti_advantage_testcase {
     use \tool_ltidiagnostics\tests\grade_scenario;
 
     /**
-     * Render the grade tab as the connection page does.
+     * Render the grade tab as the connection page does: the rows and the journal come from the sections, whose rights
+     * are those of the current user (no context override).
      *
      * @param string $key Connection key.
-     * @param array $ctx Context overrides.
+     * @param array $ctx Context of the tab (repair state).
      * @return string
      */
     private function render_grades(string $key, array $ctx = []): string {
@@ -53,63 +54,31 @@ final class channels_output_test extends \lti_advantage_testcase {
         $PAGE->set_url(new \moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $key]));
         $PAGE->set_context(\context_system::instance());
         $conn = (new inventory())->get_connection($key);
-        $diag = (new grade_diagnosis())->run($conn, ['showscores' => $ctx['showscores'] ?? false]);
+        $scope = \tool_ltidiagnostics\local\scope::make(0, 0);
+        $base = \tool_ltidiagnostics\output\sections::grade_ctx($conn);
+        $diag = (new grade_diagnosis())->run($conn, ['showscores' => $base['showscores']]);
+        $rows = \tool_ltidiagnostics\output\sections::render($conn, 'grades_rows', [], $scope);
+        $journal = \tool_ltidiagnostics\output\sections::render($conn, 'grades_journal', [], $scope);
         $out = $PAGE->get_renderer('tool_ltidiagnostics', 'grades', RENDERER_TARGET_GENERAL);
-        return $out->grades_tab($diag, journal::page($key), $ctx + [
-            'key' => $key, 'pageurl' => new \moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $key]),
-            'showscores' => false, 'canrepair' => false, 'canresult' => false, 'canoptin' => false,
-            'repairstate' => ['site' => false, 'optin' => false, 'capability' => false],
+        return $out->grades_tab($diag, $rows['html'], $journal['html'], $base + $ctx + [
+            'pageurl' => new \moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $key]),
+            'canoptin' => false, 'repairstate' => ['site' => false, 'optin' => false, 'capability' => false],
+            'scope' => $scope,
         ]);
     }
 
     /**
-     * Read-only users see no mutating action and no score; tables have captions, row headers and labelled badges.
+     * A user with only the view capability.
+     *
+     * @return \stdClass User.
      */
-    public function test_read_only_view_is_accessible_and_inert(): void {
-        $this->resetAfterTest();
-        $this->setAdminUser();
-        $s = $this->build_grade_scenario();
-        $html = $this->render_grades($s->keyb);
-        $this->assertStringNotContainsString('repair.php', $html, 'No replay link without the right.');
-        $this->assertStringNotContainsString('value="checkresult"', $html);
-        $this->assertStringNotContainsString('value="optin"', $html);
-        foreach (['65.00', '0.65', '100.00'] as $score) {
-            $this->assertStringNotContainsString($score, strip_tags($html), 'No score value without viewgrades.');
-        }
-        foreach (
-            ['tool_ltidiagnostics_grades_prereq', 'tool_ltidiagnostics_grades_findings',
-                'tool_ltidiagnostics_grades_rows'] as $id
-        ) {
-            $this->assertMatchesRegularExpression('#<table[^>]*id="' . $id . '"[^>]*>\s*<caption#', $html, $id);
-        }
-        $this->assertStringContainsString('scope="row"', $html);
-        $this->assertDoesNotMatchRegularExpression('#<span class="badge[^"]*">\s*</span>#', $html, 'Every badge has text.');
-        $this->assertStringContainsString('data-risks="', $html);
-        $this->assertStringContainsString(get_string('gf_gr_lastgrade_blocks', 'tool_ltidiagnostics'), $html);
-        $this->assertStringNotContainsString('b-l1', $html);
-        $this->assertStringNotContainsString('id=' . $s->users->l1->id, $html);
-    }
-
-    /**
-     * With the replay switched on and the right, the replay is offered exactly where it is possible.
-     */
-    public function test_actions_follow_rights_and_targets(): void {
-        $this->resetAfterTest();
-        $this->setAdminUser();
-        $s = $this->build_grade_scenario();
-        $html = $this->render_grades($s->keyb, ['canrepair' => true, 'canresult' => true, 'canoptin' => true,
-            'showscores' => true, 'repairstate' => ['site' => true, 'optin' => true, 'capability' => true]]);
-        $this->assertStringContainsString('link=' . $s->linkb1 . '&amp;user=' . $s->users->l1->id, $html);
-        $this->assertStringNotContainsString(
-            'link=' . $s->linkb2 . '&amp;user=',
-            $html,
-            'No replay where the score scope is missing.'
-        );
-        $this->assertStringNotContainsString('value="checkresult"', $html, 'BUW granted no result scope.');
-        $this->assertStringContainsString('value="optout"', $html);
-        $a = $this->render_grades($s->keya, ['canrepair' => true, 'canresult' => true, 'showscores' => true,
-            'repairstate' => ['site' => true, 'optin' => true, 'capability' => true]]);
-        $this->assertStringContainsString('value="checkresult"', $a, 'A granted the result scope.');
+    private function viewer(): \stdClass {
+        $user = $this->getDataGenerator()->create_user();
+        $role = $this->getDataGenerator()->create_role();
+        assign_capability('tool/ltidiagnostics:view', CAP_ALLOW, $role, \context_system::instance()->id);
+        role_assign($role, $user->id, \context_system::instance()->id);
+        accesslib_clear_all_caches_for_unit_testing();
+        return $user;
     }
 
     /**

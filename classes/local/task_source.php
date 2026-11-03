@@ -113,15 +113,25 @@ class task_source {
     }
 
     /**
-     * Read the task log for the LTI family, newest first.
+     * Number of LTI related task log rows matching the filters (same filters as task_log()).
      *
-     * @param array $filters Optional: from, to (unix), limit (max 500), offset, onlyfailed (bool).
-     * @return array[] Each with classname, component, type, start, duration, failed, output (redacted, shortened).
+     * @param array $filters Filters.
+     * @return int
      */
-    public function task_log(array $filters = []): array {
+    public function task_log_count(array $filters = []): int {
         global $DB;
-        $limit = isset($filters['limit']) ? max(1, min(500, (int) $filters['limit'])) : 100;
-        $offset = isset($filters['offset']) ? max(0, (int) $filters['offset']) : 0;
+        [$where, $params] = $this->log_where($filters);
+        return (int) $DB->count_records_select('task_log', $where, $params);
+    }
+
+    /**
+     * WHERE of the task log filters: LTI related components/classes, period, failures, class name text.
+     *
+     * @param array $filters from, to, onlyfailed, text, classes (string[]: class name parts, any of them).
+     * @return array [where, params]
+     */
+    private function log_where(array $filters): array {
+        global $DB;
         $likes = [];
         $params = [];
         foreach (self::PREFIXES as $i => $c) {
@@ -141,6 +151,32 @@ class task_source {
         if (!empty($filters['onlyfailed'])) {
             $where .= ' AND result = 1';
         }
+        if (!empty($filters['text'])) {
+            $where .= ' AND ' . $DB->sql_like('classname', ':ttext', false);
+            $params['ttext'] = '%' . $DB->sql_like_escape((string) $filters['text']) . '%';
+        }
+        if (!empty($filters['classes'])) {
+            $parts = [];
+            foreach (array_values((array) $filters['classes']) as $i => $part) {
+                $parts[] = $DB->sql_like('classname', ':tcl' . $i, false);
+                $params['tcl' . $i] = '%' . $DB->sql_like_escape((string) $part) . '%';
+            }
+            $where .= ' AND (' . implode(' OR ', $parts) . ')';
+        }
+        return [$where, $params];
+    }
+
+    /**
+     * Read the task log for the LTI family, newest first.
+     *
+     * @param array $filters Optional: from, to (unix), limit (max 500), offset, onlyfailed (bool).
+     * @return array[] Each with classname, component, type, start, duration, failed, output (redacted, shortened).
+     */
+    public function task_log(array $filters = []): array {
+        global $DB;
+        $limit = isset($filters['limit']) ? max(1, min(500, (int) $filters['limit'])) : 100;
+        $offset = isset($filters['offset']) ? max(0, (int) $filters['offset']) : 0;
+        [$where, $params] = $this->log_where($filters);
         $out = [];
         foreach ($DB->get_records_select('task_log', $where, $params, 'timestart DESC, id DESC', '*', $offset, $limit) as $r) {
             $out[] = [

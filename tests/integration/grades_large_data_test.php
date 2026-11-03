@@ -139,12 +139,81 @@ final class grades_large_data_test extends \lti_advantage_testcase {
         $this->assertGreaterThanOrEqual(self::ROWS, $stored);
         $this->assertSame($stored, array_sum($counts['task_log']));
 
+        // A production database keeps planner statistics up to date (autovacuum, InnoDB persistent statistics); rows
+        // inserted inside the test transaction are not analysed automatically, so do what autovacuum would do.
+        if ($DB->get_dbfamily() === 'postgres') {
+            foreach (['tool_ltidiagnostics_gatt', 'enrol_lti_users', 'enrol_lti_user_resource_link', 'user'] as $t) {
+                $DB->execute('ANALYZE {' . $t . '}');
+            }
+        }
         // Diagnosis of 1 001+ learners: the reads of one page do not grow with the learners or the journal.
         [$d, $largereads, $secs] = $this->measure($diagnose);
         $this->assertGreaterThanOrEqual(self::LEARNERS, $d['total']);
         $this->assertCount(grade_diagnosis::MAXPAGE, $d['rows']);
         $this->assertLessThanOrEqual($smallreads + 3, $largereads, "reads: $smallreads small, $largereads large");
         $this->assertLessThan(20, $secs);
+
+        // Filters, counters and the asynchronous sections at the largest page size (issues #21, #23): totals and counters
+        // come from the same population, reads stay bounded, "every match" refuses quickly above the maximum.
+        $this->setAdminUser();
+        global $PAGE;
+        $PAGE->set_url(new \moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $s->keyb]));
+        $PAGE->set_context(\context_system::instance());
+        [$failed, $freads, $fsecs] = $this->measure(fn() => (new grade_diagnosis())->run($conn, ['limit' => 500,
+            'importtasklog' => false, 'filters' => ['transfer' => 'failed']]));
+        $this->assertSame($failed['total'], $d['counters']['transfer']['failed']);
+        foreach ($d['counters'] as $dim => $values) {
+            $this->assertSame($d['total'], array_sum($values), $dim);
+        }
+        $this->assertLessThanOrEqual($largereads + 3, $freads);
+        $this->assertLessThan(20, $fsecs);
+        $scope = \tool_ltidiagnostics\local\scope::make(0, 0);
+        [$rowsection, $rreads, $rsecs] = $this->measure(fn() => \tool_ltidiagnostics\output\sections::render(
+            $conn,
+            'grades_rows',
+            ['perpage' => '500'],
+            $scope
+        ));
+        $this->assertSame($d['total'], $rowsection['total']);
+        $this->assertLessThan(30, $rsecs, 'Rows section with 500 rows');
+        $this->assertLessThanOrEqual($largereads + 30, $rreads, "rows section reads: $rreads");
+        [$jsection, $jreads, $jsecs] = $this->measure(fn() => \tool_ltidiagnostics\output\sections::render(
+            $conn,
+            'grades_journal',
+            ['jperpage' => '500', 'jtransfer' => 'failed'],
+            $scope
+        ));
+        $this->assertGreaterThan(0, $jsection['total']);
+        $this->assertLessThan(20, $jsecs, 'Journal section with 500 rows');
+        $this->assertLessThanOrEqual(30, $jreads, "journal section reads: $jreads");
+        [[$pairs, $mtotal], , $msecs] = $this->measure(fn() => (new grade_diagnosis())->matching_pairs($conn, $scope, [], 100));
+        $this->assertSame([], $pairs);
+        $this->assertSame($d['total'], $mtotal);
+        $this->assertLessThan(5, $msecs);
+
+        // 100 000 observations: the evidence view pages in SQL with a bounded number of reads.
+        $obs = [];
+        for ($i = 0; $i < self::ROWS; $i++) {
+            $obs[] = ['traceid' => 't' . $i, 'eventtype' => $i % 3 ? 'launch' : 'grade', 'direction' => 'in',
+                'eventname' => 'ev' . ($i % 50), 'component' => 'enrol_lti', 'connkey' => $s->keyb, 'issuerhash' => '',
+                'courseid' => 0, 'cmid' => 0, 'contextid' => 0, 'userid' => 0, 'objectid' => 0, 'entrypoint' => 'web',
+                'timecreated' => $now - $i];
+            if (count($obs) === 5000) {
+                $DB->insert_records('tool_ltidiagnostics_obs', $obs);
+                $obs = [];
+            }
+        }
+        [$ev, $ereads, $esecs] = $this->measure(fn() => (new \tool_ltidiagnostics\local\evidence_query())->page(
+            $conn,
+            $scope,
+            'observer',
+            ['service' => 'ags', 'limit' => 500, 'offset' => 1000],
+            $now
+        ));
+        $this->assertCount(500, $ev['rows']);
+        $this->assertGreaterThan(30000, $ev['total']);
+        $this->assertLessThanOrEqual(3, $ereads);
+        $this->assertLessThan(10, $esecs);
 
         // Support package: bounded rows and attempts.
         [$pkg, $pkgreads] = $this->measure(fn() => support_package::build($conn, $now));

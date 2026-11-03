@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="admin/tool/ltidiagnostics/db" VERSION="2026110200" COMMENT="XMLDB file for Moodle admin/tool/ltidiagnostics"
+<XMLDB PATH="admin/tool/ltidiagnostics/db" VERSION="2026110300" COMMENT="XMLDB file for Moodle admin/tool/ltidiagnostics"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="../../../../lib/xmldb/xmldb.xsd"
 >
@@ -179,6 +179,7 @@
         <FIELD NAME="bookingcheckedat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="operatorid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who requested a replay, 0 for core"/>
         <FIELD NAME="purpose" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Reason given by the operator"/>
+        <FIELD NAME="batchid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false" COMMENT="Id of the confirmed selection (bulk replay) the attempt belongs to, empty for single replays and core sends"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
       </FIELDS>
@@ -195,6 +196,7 @@
         <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
         <INDEX NAME="operatorid" UNIQUE="false" FIELDS="operatorid"/>
         <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+        <INDEX NAME="batchid" UNIQUE="false" FIELDS="batchid"/>
       </INDEXES>
     </TABLE>
     <TABLE NAME="tool_ltidiagnostics_gstate" COMMENT="Score state per replay target: monotonic version and last issued AGS timestamp">

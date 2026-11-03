@@ -551,6 +551,79 @@ final class matrix_health_test extends \advanced_testcase {
     }
 
     /**
+     * A failed optional GET is no global outage when real launches work (issue #20): the probe failure is downgraded,
+     * the counter-evidence is a finding of its own, the root cause is not the probe, and launch and probe are rated
+     * separately.
+     */
+    public function test_probe_contradicted_by_real_launch(): void {
+        $this->resetAfterTest();
+        $probe = ['purpose' => 'jwks', 'code' => 'firewall_drop_suspected', 'checkedat' => self::NOW - 600, 'skew' => null,
+            'certexpiry' => null, 'jwks' => null, 'framing' => null];
+        $quiet = $this->evaluate($this->tool(), $this->facts('tool'), null, ['jwks' => $probe]);
+        $this->assertSame('blocking', $this->codes($quiet)['probe_firewall_drop_suspected'], 'Without traffic it blocks.');
+        $this->assertSame('failed', $quiet['services']['jwks_probe']['state']);
+        $this->assertSame('unknown', $quiet['services']['launch']['state']);
+
+        $facts = $this->facts('tool', ['obs' => ['launch' => self::NOW - 300, 'count' => 1]]);
+        $result = $this->evaluate($this->tool(), $facts, null, ['jwks' => $probe]);
+        $codes = $this->codes($result);
+        $this->assertSame('warning', $codes['probe_firewall_drop_suspected'], 'Downgraded by real traffic.');
+        $this->assertArrayHasKey('probe_contradicted', $codes);
+        $this->assertTrue(
+            $result['rootcause'] === null || strpos($result['rootcause']->code, 'probe_') !== 0,
+            'A contradicted probe is never the root cause.'
+        );
+        $this->assertSame('ok', $result['services']['launch']['state']);
+        $this->assertSame('ok', $result['services']['jwks']['state'], 'The key set worked for the launch.');
+        $this->assertSame('warning', $result['services']['jwks_probe']['state']);
+        $this->assertSame('probe', $result['services']['jwks_probe']['source']);
+    }
+
+    /**
+     * A GET on the POST-only token endpoint answered with 405 is the expected answer, not a defect (issue #16).
+     */
+    public function test_token_endpoint_405_is_expected(): void {
+        $this->resetAfterTest();
+        $probe = ['purpose' => 'oauth', 'code' => 'http_client_error', 'httpstatus' => 405, 'checkedat' => self::NOW,
+            'skew' => null, 'certexpiry' => null, 'jwks' => null, 'framing' => null, 'method' => 'GET',
+            'executor' => 'this_site'];
+        $result = $this->evaluate($this->tool(), $this->facts('tool'), null, ['oauth' => $probe]);
+        $codes = $this->codes($result);
+        $this->assertSame('info', $codes['probe_get_not_allowed']);
+        $this->assertArrayNotHasKey('probe_http_client_error', $codes);
+        $this->assertSame('ok', $result['services']['token_probe']['state']);
+        $this->assertSame('svc_token_405', $result['services']['token_probe']['detail']);
+        foreach ($result['services'] as $service => $sv) {
+            $this->assertTrue(get_string_manager()->string_exists('svc_' . $service, 'tool_ltidiagnostics'), $service);
+            $this->assertTrue(get_string_manager()->string_exists('svcstate_' . $sv['state'], 'tool_ltidiagnostics'));
+            $this->assertTrue(get_string_manager()->string_exists($sv['detail'], 'tool_ltidiagnostics'), $sv['detail']);
+        }
+        // Firewall wording: never a statement of fact.
+        $fix = get_string('f_probe_firewall_drop_suspected_fix', 'tool_ltidiagnostics');
+        $this->assertStringContainsString('whether', $fix);
+    }
+
+    /**
+     * AGS transport and consumer booking are separate ratings: HTTP 2xx without consumer evidence is "accepted", the
+     * booking stays "not proven" (issue #20).
+     */
+    public function test_ags_and_booking_rated_separately(): void {
+        $this->resetAfterTest();
+        \tool_ltidiagnostics\local\grades\journal::insert([
+            'attemptid' => 'a1', 'connkey' => 'tool:3:4', 'resourcelinkrowid' => 1, 'userid' => 2, 'state' => 'http_accepted',
+            'httpstatus' => 200, 'source' => 'instrumented', 'origin' => 'replay', 'timecreated' => self::NOW,
+        ]);
+        $result = $this->evaluate($this->tool(), $this->facts('tool'));
+        $this->assertSame('ok', $result['services']['ags']['state']);
+        $this->assertSame('unknown', $result['services']['booking']['state'], '2xx is not a booking.');
+        \tool_ltidiagnostics\local\grades\journal::insert([
+            'attemptid' => 'a2', 'connkey' => 'tool:3:4', 'resourcelinkrowid' => 1, 'userid' => 3, 'state' => 'http_rejected',
+            'httpstatus' => 409, 'source' => 'instrumented', 'origin' => 'replay', 'timecreated' => self::NOW,
+        ]);
+        $this->assertSame('warning', $this->evaluate($this->tool(), $this->facts('tool'))['services']['ags']['state']);
+    }
+
+    /**
      * Data provider.
      *
      * @return array

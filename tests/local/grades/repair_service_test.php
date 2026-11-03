@@ -176,6 +176,102 @@ final class repair_service_test extends \lti_advantage_testcase {
     }
 
     /**
+     * Bulk replay (issue #22): a server-side selection with TTL bound to the connection, re-verification per target,
+     * one batch id, partial failures that leave the other targets unchanged, no second batch from the same selection,
+     * and a batch status that never reads 2xx as booked.
+     */
+    public function test_bulk_selection_and_batch(): void {
+        global $DB, $SESSION;
+        $s = $this->setup_replay();
+        $l1 = (int) $s->users->l1->id;
+        $l2 = (int) $s->users->l2->id;
+        $l4 = (int) $s->users->l4->id;
+        $this->assertSame(
+            [['linkid' => 5, 'userid' => 7]],
+            selection::parse(['5:7', '5:7', 'x:1', '0:3', '5:7; DROP', '-1:2'])
+        );
+        $this->assertFalse(selection::create($s->keya, [], 'rows', [], $this->now)['ok']);
+        set_config('repairbatchmax', 2, 'tool_ltidiagnostics');
+        $toolarge = selection::create(
+            $s->keya,
+            selection::parse(["{$s->linka}:$l1", "{$s->linka}:$l2", "{$s->linka}:$l4"]),
+            'matches',
+            [],
+            $this->now
+        );
+        $this->assertFalse($toolarge['ok']);
+        $this->assertSame('sel_toolarge', $toolarge['reason']);
+        set_config('repairbatchmax', 20, 'tool_ltidiagnostics');
+        $sel = selection::create(
+            $s->keya,
+            selection::parse(["{$s->linka}:$l1", "{$s->linka}:$l2", "{$s->linka}:$l4"]),
+            'matches',
+            ['grade' => ''],
+            $this->now
+        );
+        $this->assertTrue($sel['ok']);
+        $this->assertSame(3, $sel['count']);
+        $this->assertNull(selection::get($sel['token'], $s->keyb, $this->now), 'Bound to its connection.');
+        $this->assertNull(selection::get('nope', $s->keya, $this->now));
+        $got = selection::get($sel['token'], $s->keya, $this->now);
+        $this->assertSame($this->now + 900, $got['expires']);
+
+        // Confirmation, as repair.php does it: drop the selection first, then one request per target with one batch id.
+        $t = new fake_ags_transport();
+        $t->posts = [['status' => 200, 'errorclass' => ''], ['status' => 409, 'errorclass' => 'http_409']];
+        $svc = $this->service($t);
+        selection::drop($sel['token']);
+        $batch = selection::batch_id();
+        $this->assertNotSame($batch, selection::batch_id(), 'Every confirmation is a new batch.');
+        $results = [];
+        foreach ($got['pairs'] as $pair) {
+            $p = $svc->preview($s->conna, $pair['linkid'], $pair['userid']);
+            $results[$pair['userid']] = $svc->request(
+                $s->conna,
+                $pair['linkid'],
+                $pair['userid'],
+                $p['fingerprint'],
+                'Bulk test',
+                2,
+                ['origin' => journal::ORIGIN_REPLAY, 'batchid' => $batch]
+            );
+        }
+        $this->assertTrue($results[$l1]['ok']);
+        $this->assertTrue($results[$l4]['ok'], '0 points are a valid target.');
+        $this->assertFalse($results[$l2]['ok'], 'No source grade: refused, nothing queued.');
+        $this->assertNull(selection::get($sel['token'], $s->keya, $this->now), 'A used selection cannot start a second batch.');
+        $again = $svc->request(
+            $s->conna,
+            $s->linka,
+            $l1,
+            $svc->preview($s->conna, $s->linka, $l1)['fingerprint'],
+            'x',
+            2,
+            ['batchid' => selection::batch_id()]
+        );
+        $this->assertSame('already_open', $again['reason'], 'Double submit while the first attempt is open.');
+
+        $rows = journal::page($s->keya, ['batchid' => $batch, 'limit' => 50]);
+        $this->assertSame(2, $rows['total']);
+        foreach ($rows['rows'] as $row) {
+            $svc->process($row->attemptid);
+        }
+        $states = array_values($DB->get_records_menu(journal::TABLE, ['batchid' => $batch], '', 'userid, state'));
+        sort($states);
+        $this->assertCount(2, $states);
+        $this->assertSame('http_accepted', $states[0], 'One target accepted.');
+        $this->assertContains($states[1], ['http_rejected', 'retry_wait', 'dead'], 'The other failed on its own (409).');
+        foreach ($DB->get_records(journal::TABLE, ['batchid' => $batch]) as $row) {
+            $this->assertNotSame('results_match', $row->bookingstate, 'HTTP 2xx is never reported as booked.');
+        }
+        $this->assertSame(0, journal::page($s->keyb, ['batchid' => $batch])['total'], 'Other connections untouched.');
+        // Expiry.
+        $old = selection::create($s->keya, selection::parse(["{$s->linka}:$l1"]), 'rows', [], $this->now - 1000);
+        $this->assertNull(selection::get($old['token'], $s->keya, $this->now));
+        $this->assertArrayNotHasKey($old['token'], $SESSION->tool_ltidiagnostics_selections ?? []);
+    }
+
+    /**
      * 0 points are sent as 0; with the result scope the AGS result is read and compared once.
      */
     public function test_zero_is_sent_and_result_compared(): void {

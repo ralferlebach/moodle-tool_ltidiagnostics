@@ -131,7 +131,7 @@ class health_check {
 
         $findings = array_merge(
             $this->configuration($c, $in['facts'], $now),
-            $this->probe_findings($c, $probes, $now),
+            $this->probe_findings($c, $probes, $now, $in['facts']),
             $this->advantage($c, $matrix, $profile, $in['facts'], $now),
             $this->core($c, $matrix, $profile, $in['facts'], $now),
             $this->access_findings($c, $in['facts'], $now),
@@ -193,9 +193,88 @@ class health_check {
             'chains' => $messages['chains'],
             'fields' => $fields,
             'partner' => $in['partnerinfo'] ?? null,
+            'services' => $this->service_status($c, $in['facts'], $probes, $now),
             'summary' => $counts,
             'checkedat' => $now,
         ];
+    }
+
+    /**
+     * Separate rating per service (issue #20): configuration, launch, key set, token endpoint, AGS and consumer booking.
+     * Each rating names its source and time; a negative probe never overrides another service's positive evidence and
+     * positive evidence never hides a negative result of the same service.
+     *
+     * @param connection $c Connection.
+     * @param array $facts Facts.
+     * @param array $probes Probes.
+     * @param int $now Time.
+     * @return array[] service => state (ok, failed, warning, unknown, notapplicable), source, time, detail (string id),
+     *     param.
+     */
+    private function service_status(connection $c, array $facts, array $probes, int $now): array {
+        $launch = (int) ($facts['obs']['launch'] ?? 0);
+        $out = [];
+        $out['launch'] = $launch ? ['state' => 'ok', 'source' => 'observer', 'time' => $launch, 'detail' => 'svc_launch_seen']
+            : ['state' => 'unknown', 'source' => 'observer', 'time' => 0, 'detail' => 'svc_launch_none'];
+        $probe = function (string $key) use ($probes): ?array {
+            return isset($probes[$key]) && is_array($probes[$key]) && !empty($probes[$key]['code']) ? $probes[$key] : null;
+        };
+        $jwks = $probe('jwks');
+        if ($c->role === connection::ROLE_TOOL && $launch) {
+            // The tool validated the launch with the platform's key set: the key set worked at that time.
+            $out['jwks'] = ['state' => 'ok', 'source' => 'observer', 'time' => $launch, 'detail' => 'svc_jwks_launch'];
+        } else {
+            $out['jwks'] = ['state' => 'unknown', 'source' => '', 'time' => 0, 'detail' => 'svc_notchecked'];
+        }
+        if ($jwks) {
+            $ok = $jwks['code'] === 'ok';
+            $out['jwks_probe'] = ['state' => $ok ? 'ok' : ($launch ? 'warning' : 'failed'), 'source' => 'probe',
+                'time' => (int) $jwks['checkedat'], 'detail' => $ok ? 'svc_probe_ok' : 'svc_probe_failed',
+                'param' => (string) $jwks['code']];
+        }
+        $oauth = $probe('oauth');
+        if ($oauth) {
+            $expected = (int) ($oauth['httpstatus'] ?? 0) === 405;
+            $out['token_probe'] = ['state' => $oauth['code'] === 'ok' || $expected ? 'ok' : ($launch ? 'warning' : 'failed'),
+                'source' => 'probe', 'time' => (int) $oauth['checkedat'],
+                'detail' => $expected ? 'svc_token_405' : ($oauth['code'] === 'ok' ? 'svc_probe_ok' : 'svc_probe_failed'),
+                'param' => (string) $oauth['code']];
+        }
+        if ($c->role === connection::ROLE_TOOL) {
+            $counts = grades\journal::counts($c->key);
+            $accepted = (int) (($counts['instrumented']['http_accepted'] ?? 0) + ($counts['task_log']['http_accepted'] ?? 0));
+            $failed = 0;
+            foreach (['http_rejected', 'dead', 'aborted'] as $state) {
+                $failed += (int) (($counts['instrumented'][$state] ?? 0) + ($counts['task_log'][$state] ?? 0));
+            }
+            $state = $failed && !$accepted ? 'failed' : ($failed ? 'warning' : ($accepted ? 'ok' : 'unknown'));
+            $out['ags'] = ['state' => $state, 'source' => 'journal', 'time' => $now, 'detail' => 'svc_ags_counts',
+                'param' => (object) ['accepted' => $accepted, 'failed' => $failed]];
+            $booked = $this->booked_count($c->key);
+            $out['booking'] = ['state' => $booked ? 'ok' : ($accepted ? 'unknown' : 'notapplicable'), 'source' => 'journal',
+                'time' => $now, 'detail' => $booked ? 'svc_booking_some' : 'svc_booking_none', 'param' => $booked];
+        } else {
+            $out['ags'] = ['state' => !empty($facts['obs']['grade_in']) ? 'ok' : 'unknown', 'source' => 'observer',
+                'time' => (int) ($facts['obs']['grade_in'] ?? 0), 'detail' => !empty($facts['obs']['grade_in'])
+                ? 'svc_ags_platform_seen' : 'svc_ags_platform_none'];
+        }
+        return $out;
+    }
+
+    /**
+     * Number of transfers of a connection with confirmed booking (AGS result or receipt).
+     *
+     * @param string $connkey Connection key.
+     * @return int
+     */
+    private function booked_count(string $connkey): int {
+        global $DB;
+        [$in, $params] = $DB->get_in_or_equal(['results_match', 'receipt_confirmed'], SQL_PARAMS_NAMED, 'bk');
+        return (int) $DB->count_records_select(
+            grades\journal::TABLE,
+            "connkey = :ck AND bookingstate $in",
+            $params + ['ck' => $connkey]
+        );
     }
 
     /**
@@ -213,10 +292,15 @@ class health_check {
     private function mark_root_cause(array $findings): ?finding {
         $chain = finding::dependency_chain();
         $root = null;
+        // A probe contradicted by real LTI traffic (issue #16) is never the root cause of the connection.
+        $contradicted = (bool) array_filter($findings, fn(finding $f) => $f->code === 'probe_contradicted');
         foreach ([finding::BLOCKING, finding::WARNING] as $severity) {
             foreach ($chain as $layer) {
                 foreach ($findings as $f) {
-                    if ($f->layer === $layer && $f->severity === $severity && !in_array($f->code, self::NOT_CAUSES, true)) {
+                    if (
+                        $f->layer === $layer && $f->severity === $severity && !in_array($f->code, self::NOT_CAUSES, true)
+                        && !($contradicted && strpos($f->code, 'probe_') === 0)
+                    ) {
                         $root = $f;
                         break 3;
                     }
@@ -416,10 +500,14 @@ class health_check {
      * @param connection $c Connection.
      * @param array $probes Probes keyed by purpose.
      * @param int $now Time.
+     * @param array $facts Collected facts (observed launches serve as counter-evidence).
      * @return finding[]
      */
-    private function probe_findings(connection $c, array $probes, int $now): array {
+    private function probe_findings(connection $c, array $probes, int $now, array $facts = []): array {
         $out = [];
+        // Issue #16: a single optional GET never outweighs real LTI traffic. A launch seen after (or within a day before)
+        // the probe proves the path the launch takes; it is counter-evidence against a global outage.
+        $launch = (int) ($facts['obs']['launch'] ?? 0);
         foreach ($probes as $probekey => $p) {
             if (!is_array($p) || empty($p['code'])) {
                 continue;
@@ -441,8 +529,21 @@ class health_check {
                     $out[] = new finding('tls_expiring', finding::L_TLS, finding::WARNING, finding::NETWORK, $a + ['a' => $days,
                         'risk' => 'low']);
                 }
+            } else if ($code === 'http_client_error' && (int) ($p['httpstatus'] ?? 0) === 405 && $probekey === 'oauth') {
+                // The token endpoint accepts only POST: a 405 to a GET is the expected answer, not a defect.
+                $out[] = new finding('probe_get_not_allowed', finding::L_OAUTH, finding::INFO, finding::NETWORK, $a + [
+                    'certainty' => finding::CERTAIN]);
             } else {
-                $out[] = $this->probe_failure($code, $a + ['a' => (string) ($p['blockreason'] ?? '')], $purpose);
+                $failure = $this->probe_failure($code, $a + ['a' => (string) ($p['blockreason'] ?? '')], $purpose);
+                $at = (int) ($p['checkedat'] ?? $now);
+                if ($launch && $launch >= $at - DAYSECS && $failure->severity === finding::BLOCKING) {
+                    $failure->severity = finding::WARNING;
+                    $failure->certainty = finding::POSSIBLE;
+                    $out[] = new finding('probe_contradicted', $failure->layer, finding::INFO, finding::ADMIN, [
+                        'evidencekind' => status::KIND_OBSERVED, 'evidence' => 'launch', 'checkedat' => $launch,
+                        'a' => userdate($launch), 'certainty' => finding::CERTAIN]);
+                }
+                $out[] = $failure;
             }
             if ($p['skew'] !== null && abs((int) $p['skew']) > 60) {
                 $out[] = new finding(

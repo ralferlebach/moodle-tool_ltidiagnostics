@@ -156,4 +156,70 @@ class behat_tool_ltidiagnostics extends behat_base {
             );
         }
     }
+
+    /**
+     * Install the minimal German language pack of the fixtures (core strings of the menu path only); the plugin brings
+     * its own German strings.
+     *
+     * @Given /^the German language pack for LTI diagnostics is installed$/
+     */
+    public function the_german_language_pack_is_installed(): void {
+        global $CFG;
+        $target = $CFG->dataroot . '/lang/de';
+        make_writable_directory($target);
+        foreach (glob(__DIR__ . '/../fixtures/langpack_de/*.php') as $file) {
+            copy($file, $target . '/' . basename($file));
+        }
+        get_string_manager()->reset_caches(true);
+    }
+
+    /**
+     * Set the preferred language of a user.
+     *
+     * @Given /^the LTI diagnostics user "(?P<username>(?:[^"]|\\")*)" uses the language "(?P<lang>[a-z_]+)"$/
+     * @param string $username User name.
+     * @param string $lang Language code.
+     */
+    public function the_user_uses_the_language(string $username, string $lang): void {
+        global $DB;
+        $DB->set_field('user', 'lang', $lang, ['username' => $username]);
+    }
+
+    /**
+     * Store network check results for a tool side connection, as a run of the safe checks would.
+     *
+     * @Given /^the LTI network checks of registration "(?P<name>(?:[^"]|\\")*)" found a GET 405 on the token endpoint$/
+     * @param string $name Registration name.
+     */
+    public function the_network_checks_found_405(string $name): void {
+        global $DB;
+        $reg = $DB->get_record('enrol_lti_app_registration', ['name' => $name], '*', MUST_EXIST);
+        $dep = $DB->get_field('enrol_lti_deployment', 'id', ['platformid' => $reg->id], MUST_EXIST);
+        $now = time();
+        \tool_ltidiagnostics\local\snapshot::save_probes('tool:' . $reg->id . ':' . $dep, [
+            'oauth' => ['purpose' => 'oauth', 'code' => 'http_client_error', 'httpstatus' => 405, 'checkedat' => $now,
+                'url' => $reg->accesstokenurl, 'method' => 'GET', 'executor' => 'this_site', 'viaproxy' => 0,
+                'dns' => ['192.0.2.10'], 'peer' => '192.0.2.10', 'errno' => 0, 'skew' => null, 'certexpiry' => null,
+                'jwks' => null, 'framing' => null],
+            'jwks' => ['purpose' => 'jwks', 'code' => 'firewall_drop_suspected', 'httpstatus' => 0, 'checkedat' => $now,
+                'url' => $reg->jwksurl, 'method' => 'GET', 'executor' => 'this_site', 'viaproxy' => 0, 'errno' => 28,
+                'skew' => null, 'certexpiry' => null, 'jwks' => null, 'framing' => null],
+        ], $now);
+    }
+
+    /**
+     * Write audit entries as the plugin does when someone views or exports.
+     *
+     * @Given /^the LTI diagnostics audit has an export by "(?P<username>(?:[^"]|\\")*)" of registration "(?P<name>(?:[^"]|\\")*)"$/
+     * @param string $username User.
+     * @param string $name Registration name.
+     */
+    public function the_audit_has_an_export(string $username, string $name): void {
+        global $DB;
+        $reg = $DB->get_record('enrol_lti_app_registration', ['name' => $name], '*', MUST_EXIST);
+        $dep = $DB->get_field('enrol_lti_deployment', 'id', ['platformid' => $reg->id], MUST_EXIST);
+        $userid = (int) $DB->get_field('user', 'id', ['username' => $username], MUST_EXIST);
+        \tool_ltidiagnostics\local\audit::log('export', 'tool:' . $reg->id . ':' . $dep, 'format=json', $userid);
+        \tool_ltidiagnostics\local\audit::log('view_grades', 'tool:' . $reg->id . ':' . $dep, '', $userid);
+    }
 }

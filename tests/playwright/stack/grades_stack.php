@@ -233,6 +233,47 @@ switch ($action) {
         echo json_encode(['ran' => $n]) . "\n";
         break;
 
+    case 'manylearners':
+        // Paging fixture (issues #21, #22): --arg more learners mapped to the Control resource link, as enrol_lti stores
+        // them after launches (LTI user, user resource link, auth_lti binding), with grades 65 (every third), 0 (every
+        // third) and none, and core's lastgrade at 0.
+        $n = (int) ($options['arg'] ?? 60);
+        $gen = new \testing_data_generator();
+        $control = $state['tool']['registrations']['control'];
+        $linkid = (int) $DB->get_field(
+            'enrol_lti_resource_link',
+            'id',
+            ['ltideploymentid' => $control['deploymentrowid']],
+            IGNORE_MULTIPLE
+        );
+        $item = \grade_item::fetch(['itemtype' => 'mod', 'itemmodule' => 'assign', 'iteminstance' => $state['tool']['assignid'],
+            'courseid' => $state['tool']['courseid']]);
+        $issuer = (string) $DB->get_field('enrol_lti_app_registration', 'platformid', ['id' => $control['id']]);
+        $made = 0;
+        for ($i = 1; $i <= $n; $i++) {
+            $username = 'pager' . $i;
+            if ($DB->record_exists('user', ['username' => $username])) {
+                continue;
+            }
+            $u = $gen->create_user(['username' => $username, 'firstname' => 'Paula', 'lastname' => sprintf('Pager %03d', $i),
+                'auth' => 'lti']);
+            $luid = $DB->insert_record('enrol_lti_users', (object) ['userid' => $u->id, 'toolid' => $state['tool']['toolid'],
+                'ltideploymentid' => $control['deploymentrowid'], 'sourceid' => 'pager-' . $i, 'lastgrade' => 0,
+                'timecreated' => time(), 'lastaccess' => time()]);
+            $DB->insert_record('enrol_lti_user_resource_link', (object) ['ltiuserid' => $luid, 'resourcelinkid' => $linkid]);
+            if (class_exists('\\auth_plugin_lti')) {
+                get_auth_plugin('lti')->create_user_binding($issuer, 'pager-' . $i, (int) $u->id);
+            }
+            if ($i % 3 === 1) {
+                $item->update_final_grade($u->id, 65, 'stack');
+            } else if ($i % 3 === 2) {
+                $item->update_final_grade($u->id, 0, 'stack');
+            }
+            $made++;
+        }
+        echo json_encode(['added' => $made, 'link' => $linkid]) . "\n";
+        break;
+
     case 'toolstate':
         $l = [];
         foreach ($DB->get_records('enrol_lti_users', ['toolid' => $state['tool']['toolid']]) as $u) {

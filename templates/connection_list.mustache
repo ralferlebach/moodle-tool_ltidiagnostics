@@ -26,9 +26,11 @@
         "headers": {"name": "Name", "role": "Role", "issuer": "Issuer", "client": "Client ID", "deployment": "Deployment ID",
             "state": "State", "services": "Services", "action": "Action"},
         "rows": [
-            {"name": "Example tool", "role": "Platform", "issuer": "https://platform.example", "clientid": "abc***yz",
-             "deploymentid": "7", "state": "active", "services": "AGS, NRPS", "url": "https://moodle.example/admin/tool/ltidiagnostics/connection.php?key=platform:7",
-             "actionlabel": "Open"}
+            {"name": "Example tool (tool type id: 7)", "role": "Platform", "issuer": "https://platform.example",
+             "clientid": "abcxyz", "deploymentid": "7", "state": "active", "services": "AGS, NRPS", "key": "platform:7",
+             "url": "https://moodle.example/admin/tool/ltidiagnostics/connection.php?key=platform:7", "actionlabel": "Open",
+             "actions": [{"url": "https://moodle.example/admin/tool/ltidiagnostics/connection.php?key=platform:7",
+                          "label": "Open", "aria": "Open Example tool"}]}
         ]
     }
 }}
@@ -51,7 +53,7 @@
     </thead>
     <tbody>
         {{#rows}}
-        <tr>
+        <tr data-key="{{key}}">
             <th scope="row">{{name}}</th>
             <td>{{role}}</td>
             <td>{{issuer}}</td>
@@ -59,7 +61,7 @@
             <td>{{deploymentid}}</td>
             <td>{{state}}</td>
             <td>{{services}}</td>
-            <td><a href="{{url}}">{{actionlabel}}</a></td>
+            <td>{{#actions}}<a href="{{url}}" class="mr-2 me-2 d-inline-block" aria-label="{{aria}}">{{label}}</a>{{/actions}}</td>
         </tr>
         {{/rows}}
     </tbody>

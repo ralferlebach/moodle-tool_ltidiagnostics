@@ -139,8 +139,20 @@ class logstore_source {
             $common .= ' AND courseid = :cid';
             $cparams['cid'] = (int) $filters['courseid'];
         }
-        [$insql, $params] = $DB->get_in_or_equal(self::EVENTS, SQL_PARAMS_NAMED, 'en');
-        $queries = ['core' => ['eventname ' . $insql . $common, $params + $cparams]];
+        if (!empty($filters['text'])) {
+            $common .= ' AND ' . $DB->sql_like('eventname', ':ltext', false);
+            $cparams['ltext'] = '%' . $DB->sql_like_escape((string) $filters['text']) . '%';
+        }
+        // Optional subset of the core events (service filter of the evidence tab); never more than EVENTS.
+        $events = self::EVENTS;
+        if (isset($filters['events'])) {
+            $events = array_values(array_intersect(self::EVENTS, (array) $filters['events']));
+        }
+        $queries = [];
+        if ($events) {
+            [$insql, $params] = $DB->get_in_or_equal($events, SQL_PARAMS_NAMED, 'en');
+            $queries['core'] = ['eventname ' . $insql . $common, $params + $cparams];
+        }
         if ($filters['family'] ?? true) {
             $likes = [];
             $fparams = [];
@@ -155,9 +167,17 @@ class logstore_source {
         $duplicates = 0;
         $truncated = false;
         $familytruncated = false;
+        $total = null;
         foreach ($logging as $name => $reader) {
             $events = [];
             try {
+                if (!empty($filters['count']) && $total === null) {
+                    // Count of the first logging reader (the page is read from every reader; duplicates are merged).
+                    $total = 0;
+                    foreach ($queries as [$where, $qparams]) {
+                        $total += (int) $reader->get_events_select_count($where, $qparams);
+                    }
+                }
                 foreach ($queries as $kind => [$where, $qparams]) {
                     $found = $reader->get_events_select($where, $qparams, 'timecreated DESC', $offset, $limit);
                     if (count($found) >= $limit) {
@@ -222,7 +242,8 @@ class logstore_source {
             return $b['time'] <=> $a['time'];
         });
         return ['available' => true, 'reason' => '', 'rows' => $rows, 'readers' => $summary, 'duplicates' => $duplicates,
-            'truncated' => $truncated, 'familytruncated' => $familytruncated, 'window' => ['from' => $from, 'to' => $to]];
+            'truncated' => $truncated, 'familytruncated' => $familytruncated, 'window' => ['from' => $from, 'to' => $to],
+            'total' => $total];
     }
 
     /**

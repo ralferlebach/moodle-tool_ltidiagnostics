@@ -197,8 +197,10 @@ final class journal_test extends \lti_advantage_testcase {
             array_column($page3['rows'], 'id')
         );
         $this->assertCount(250, array_unique($ids));
-        $this->assertSame(200, journal::MAXPAGE);
-        $this->assertCount(200, journal::page('tool:1:1', ['limit' => 5000])['rows']);
+        $this->assertSame(500, journal::MAXPAGE);
+        $all = journal::page('tool:1:1', ['limit' => 5000]);
+        $this->assertCount(250, $all['rows'], 'A limit above the maximum page is cut to 500, which holds all 250 rows.');
+        $this->assertSame(250, $all['total']);
 
         $latest = journal::latest('tool:1:1', [1, 2], [10, 11, 12, 13, 14]);
         $this->assertCount(10, $latest);
@@ -215,5 +217,43 @@ final class journal_test extends \lti_advantage_testcase {
         journal::insert(['connkey' => 'tool:1:1', 'state' => 'dead', 'timecreated' => $now - 400 * DAYSECS]);
         $this->assertSame(1, journal::purge($now - 365 * DAYSECS));
         $this->assertTrue($DB->record_exists(journal::TABLE, ['id' => $open->id]), 'Open attempts survive the retention.');
+    }
+
+    /**
+     * Journal filters run on the server and the total matches the rows (issue #23): origin, transfer class, attribution,
+     * period, scope (tool ids, empty scope = nothing), person, link and batch.
+     */
+    public function test_server_side_filters(): void {
+        $this->resetAfterTest();
+        $base = ['connkey' => 'tool:1:1', 'timecreated' => 1000];
+        journal::insert(['origin' => journal::ORIGIN_CORE, 'source' => 'task_log', 'state' => 'skipped',
+            'resourcelinkrowid' => 0, 'userid' => 5, 'toolid' => 1] + $base);
+        journal::insert(['origin' => journal::ORIGIN_REPLAY, 'state' => 'http_accepted', 'resourcelinkrowid' => 7,
+            'userid' => 5, 'toolid' => 1, 'batchid' => 'b-1', 'timecreated' => 2000] + $base);
+        journal::insert(['origin' => journal::ORIGIN_RETRY, 'state' => 'http_rejected', 'httpstatus' => 409,
+            'resourcelinkrowid' => 7, 'userid' => 6, 'toolid' => 2, 'batchid' => 'b-1', 'timecreated' => 3000] + $base);
+        journal::insert(['connkey' => 'tool:9:9', 'state' => 'http_accepted', 'resourcelinkrowid' => 7, 'userid' => 5]);
+        $count = function (array $f): int {
+            $page = journal::page('tool:1:1', $f + ['limit' => 50]);
+            $this->assertCount($page['total'], $page['rows'], json_encode($f));
+            return $page['total'];
+        };
+        $this->assertSame(3, $count([]), 'Never another connection.');
+        $this->assertSame(1, $count(['origin' => 'core']));
+        $this->assertSame(2, $count(['origin' => 'replay']), 'Retries belong to the replays.');
+        $this->assertSame(1, $count(['transfer' => 'skipped']));
+        $this->assertSame(1, $count(['transfer' => 'accepted']));
+        $this->assertSame(1, $count(['transfer' => 'failed']));
+        $this->assertSame(0, $count(['transfer' => 'pending']));
+        $this->assertSame(1, $count(['attribution' => 'unattributed']), 'Core log rows without mapping stay apart.');
+        $this->assertSame(2, $count(['attribution' => 'attributed']));
+        $this->assertSame(2, $count(['from' => 1500]));
+        $this->assertSame(1, $count(['to' => 1500]));
+        $this->assertSame(2, $count(['toolids' => [1]]));
+        $this->assertSame(0, $count(['toolids' => []]), 'An empty scope shows nothing, not everything.');
+        $this->assertSame(2, $count(['userid' => 5]));
+        $this->assertSame(1, $count(['resourcelinkrowid' => 7, 'userid' => 5]));
+        $this->assertSame(2, $count(['batchid' => 'b-1']));
+        $this->assertSame(3, $count(['transfer' => 'nonsense', 'origin' => 'nonsense']), 'Unknown values do not filter.');
     }
 }

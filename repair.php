@@ -43,10 +43,11 @@ $linkid = optional_param('link', 0, PARAM_INT);
 $userid = optional_param('user', 0, PARAM_INT);
 $attemptid = optional_param('attempt', '', PARAM_ALPHANUMEXT);
 $action = optional_param('action', '', PARAM_ALPHA);
-$batch = optional_param('batch', 0, PARAM_BOOL);
+$sel = optional_param('sel', '', PARAM_ALPHANUM);
+$batchview = optional_param('batchview', '', PARAM_ALPHANUMEXT);
 
 $pageurl = new moodle_url('/admin/tool/ltidiagnostics/repair.php', array_filter(['key' => $key, 'link' => $linkid,
-    'user' => $userid, 'attempt' => $attemptid, 'batch' => $batch]));
+    'user' => $userid, 'attempt' => $attemptid, 'sel' => $sel, 'batchview' => $batchview]));
 admin_externalpage_setup('tool_ltidiagnostics_index', '', null, $pageurl);
 $context = context_system::instance();
 require_capability('tool/ltidiagnostics:view', $context);
@@ -183,30 +184,120 @@ if ($attemptid !== '') {
     die;
 }
 
+if ($action === 'select') {
+    // Selection of replay targets (issue #22): marked rows, all rows of the page or every match of the filters. Only the
+    // selection is stored; nothing is sent before its preview was confirmed.
+    require_sesskey();
+    require_capability('tool/ltidiagnostics:repairgrades', $context);
+    if ($conn->role !== connection::ROLE_TOOL) {
+        throw new \moodle_exception('greplay_notavailable', 'tool_ltidiagnostics');
+    }
+    $scope = \tool_ltidiagnostics\local\scope::from_request();
+    // Back to the same rows (filters, page size, page) when the selection cannot be made.
+    $keep = array_filter([
+        'fgrade' => optional_param('fgrade', '', PARAM_ALPHA),
+        'ftransfer' => optional_param('ftransfer', '', PARAM_ALPHA),
+        'fbooking' => optional_param('fbooking', '', PARAM_ALPHA),
+        'fgradesync' => optional_param('fgradesync', '', PARAM_ALPHANUM),
+        'fuser' => optional_param('fuser', 0, PARAM_INT),
+        'flink' => optional_param('flink', 0, PARAM_INT),
+        'fsearch' => trim(optional_param('fsearch', '', PARAM_TEXT)),
+        'perpage' => optional_param('perpage', 0, PARAM_INT),
+        'offset' => optional_param('offset', 0, PARAM_INT),
+    ]);
+    $back = new moodle_url($gradesurl, $scope->params() + $keep, 'tool_ltidiagnostics_rows');
+    $mode = optional_param('selectmode', 'rows', PARAM_ALPHA);
+    if ($mode === 'matches') {
+        $filters = \tool_ltidiagnostics\local\grades\pair_query::clean([
+            'grade' => optional_param('fgrade', '', PARAM_ALPHA),
+            'transfer' => optional_param('ftransfer', '', PARAM_ALPHA),
+            'booking' => optional_param('fbooking', '', PARAM_ALPHA),
+            'gradesync' => optional_param('fgradesync', '', PARAM_RAW),
+            'userid' => optional_param('fuser', 0, PARAM_INT),
+            'linkid' => optional_param('flink', 0, PARAM_INT),
+            // The name search is part of the population only for users who may see names (as on the page).
+            'usersearch' => \tool_ltidiagnostics\local\identity::can_see_names()
+                ? trim(optional_param('fsearch', '', PARAM_TEXT)) : '',
+        ]);
+        $max = \tool_ltidiagnostics\local\config::bounded('repairbatchmax');
+        [$pairs, $total] = (new grade_diagnosis())->matching_pairs($conn, $scope, $filters, $max);
+        if ($total > $max) {
+            redirect(
+                $back,
+                get_string('gsel_toolarge', 'tool_ltidiagnostics', (object) ['count' => $total, 'max' => $max]),
+                null,
+                \core\output\notification::NOTIFY_ERROR
+            );
+        }
+    } else {
+        $filters = [];
+        // Values are "linkid:userid"; selection::parse() keeps only well-formed positive integer pairs.
+        $values = $mode === 'page' ? explode(',', optional_param('displayed', '', PARAM_RAW))
+            : optional_param_array('pairs', [], PARAM_RAW);
+        $pairs = \tool_ltidiagnostics\local\grades\selection::parse(array_map('strval', (array) $values));
+    }
+    $r = \tool_ltidiagnostics\local\grades\selection::create($key, $pairs, $mode, $filters, $now);
+    if (!$r['ok']) {
+        redirect(
+            $back,
+            get_string('g' . $r['reason'], 'tool_ltidiagnostics', (object) ['count' => $r['count'],
+            'max' => \tool_ltidiagnostics\local\config::bounded('repairbatchmax')]),
+            null,
+            \core\output\notification::NOTIFY_ERROR
+        );
+    }
+    redirect(new moodle_url('/admin/tool/ltidiagnostics/repair.php', ['key' => $key, 'sel' => $r['token']]));
+}
+
 // Preview and confirmation of a single or batch replay.
 if ($conn->role !== connection::ROLE_TOOL) {
     throw new \moodle_exception('greplay_notavailable', 'tool_ltidiagnostics');
 }
 $canrepair = repair_service::can_repair($key);
+$back = html_writer::link($gradesurl, get_string('backtoconnection', 'tool_ltidiagnostics'), ['class' => 'd-block mb-3']);
+
+if ($batchview !== '') {
+    // Status of one confirmed selection: every attempt of the batch with its own state; HTTP 2xx is not "booked".
+    $rows = array_values($DB->get_records(
+        journal::TABLE,
+        ['connkey' => $key, 'batchid' => $batchview],
+        'id ASC',
+        '*',
+        0,
+        \tool_ltidiagnostics\local\config::bounded('repairbatchmax') * \tool_ltidiagnostics\local\config::bounded(
+            'repairmaxattempts'
+        )
+    ));
+    echo $output->header();
+    echo $output->heading(get_string('gbatch_title', 'tool_ltidiagnostics'));
+    echo $back;
+    echo $output->batch_status($rows, ['key' => $key, 'showscores' => $showscores]);
+    echo html_writer::link($pageurl, get_string('gbatch_refresh', 'tool_ltidiagnostics'), ['class' => 'btn btn-secondary mt-2',
+        'id' => 'tool_ltidiagnostics_batch_refresh']);
+    echo $output->footer();
+    die;
+}
+
 $formhtml = '';
 $previews = [];
-if ($batch) {
-    // Batch: the replayable learners of one resource link, bounded by the batch limit.
-    $max = \tool_ltidiagnostics\local\config::bounded('repairbatchmax');
-    $diag = (new grade_diagnosis())->run($conn, ['resourcelinkrowid' => $linkid, 'limit' => $max, 'importtasklog' => false]);
-    foreach ($diag['rows'] as $r) {
-        if ($r['replayable']) {
-            $previews[$r['userid']] = $service->preview($conn, $linkid, $r['userid']);
-        }
+$selection = null;
+if ($sel !== '') {
+    $selection = \tool_ltidiagnostics\local\grades\selection::get($sel, $key, $now);
+    if (!$selection) {
+        redirect($gradesurl, get_string('gsel_expired', 'tool_ltidiagnostics'), null, \core\output\notification::NOTIFY_ERROR);
+    }
+    foreach ($selection['pairs'] as $pair) {
+        $previews[$pair['linkid'] . ':' . $pair['userid']] = $service->preview($conn, $pair['linkid'], $pair['userid']) +
+            ['linkid' => $pair['linkid'], 'userid' => $pair['userid']];
     }
     $targets = [];
-    foreach ($previews as $uid => $p) {
+    foreach ($previews as $id => $p) {
         if (!$p['blockers'] && !$p['open']) {
-            $targets[$uid] = $p['fingerprint'];
+            $targets[$id] = $p['fingerprint'];
         }
     }
     if ($canrepair && $targets) {
-        $form = new \tool_ltidiagnostics\form\replay_form($pageurl, ['key' => $key, 'link' => $linkid, 'mode' => 'batch',
+        $form = new \tool_ltidiagnostics\form\replay_form($pageurl, ['key' => $key, 'sel' => $sel, 'mode' => 'bulk',
             'targets' => json_encode($targets), 'scopetext' => get_string(
                 'greplay_scope_batch',
                 'tool_ltidiagnostics',
@@ -214,8 +305,8 @@ if ($batch) {
             )]);
     }
 } else {
-    $previews[$userid] = $service->preview($conn, $linkid, $userid);
-    $p = $previews[$userid];
+    $p = $service->preview($conn, $linkid, $userid);
+    $previews[$linkid . ':' . $userid] = $p + ['linkid' => $linkid, 'userid' => $userid];
     if ($canrepair && !$p['blockers'] && !$p['open']) {
         $form = new \tool_ltidiagnostics\form\replay_form($pageurl, ['key' => $key, 'link' => $linkid, 'user' => $userid,
             'mode' => 'single', 'targets' => $p['fingerprint'], 'scopetext' => get_string(
@@ -227,35 +318,45 @@ if ($batch) {
 }
 if (!empty($form)) {
     if ($form->is_cancelled()) {
+        if ($sel !== '') {
+            \tool_ltidiagnostics\local\grades\selection::drop($sel);
+        }
         redirect($gradesurl);
     }
     if ($data = $form->get_data()) {
         require_capability('tool/ltidiagnostics:repairgrades', $context);
-        if ($data->mode === 'batch') {
-            $targets = json_decode((string) $data->targets, true);
+        if ($data->mode === 'bulk') {
+            // The selection is consumed: a second submission of the same form finds nothing to send.
+            \tool_ltidiagnostics\local\grades\selection::drop($sel);
+            $batchid = \tool_ltidiagnostics\local\grades\selection::batch_id();
+            $targets = (array) json_decode((string) $data->targets, true);
             $ok = 0;
-            $refused = [];
-            foreach ((array) $targets as $uid => $fp) {
+            $refused = 0;
+            foreach ($targets as $id => $fp) {
+                if (!isset($previews[$id])) {
+                    continue;
+                }
                 $r = $service->request(
                     $conn,
-                    $linkid,
-                    (int) $uid,
+                    (int) $previews[$id]['linkid'],
+                    (int) $previews[$id]['userid'],
                     (string) $fp,
                     (string) $data->purpose,
                     (int) $USER->id,
-                    ['origin' => journal::ORIGIN_BATCH]
+                    ['origin' => journal::ORIGIN_BATCH, 'batchid' => $batchid]
                 );
                 if ($r['ok']) {
                     $ok++;
                 } else {
-                    $refused[] = $r['reason'];
-                }
-                if (count($refused) + $ok >= \tool_ltidiagnostics\local\config::bounded('repairbatchmax')) {
-                    break;
+                    $refused++;
                 }
             }
-            redirect($gradesurl, get_string('greplay_batch_queued', 'tool_ltidiagnostics', (object) ['ok' => $ok,
-                'refused' => count($refused)]));
+            \tool_ltidiagnostics\local\audit::log('graderepair_batch', $key, 'batch=' . $batchid . ' queued=' . $ok .
+                ' refused=' . $refused);
+            redirect(
+                new moodle_url('/admin/tool/ltidiagnostics/repair.php', ['key' => $key, 'batchview' => $batchid]),
+                get_string('greplay_batch_queued', 'tool_ltidiagnostics', (object) ['ok' => $ok, 'refused' => $refused])
+            );
         }
         $r = $service->request($conn, $linkid, $userid, (string) $data->targets, (string) $data->purpose, (int) $USER->id);
         redirect($r['ok'] ? new moodle_url('/admin/tool/ltidiagnostics/repair.php', ['key' => $key,
@@ -268,22 +369,17 @@ if (!empty($form)) {
 
 echo $output->header();
 echo $output->heading(get_string('greplay_title', 'tool_ltidiagnostics'));
-echo html_writer::link($gradesurl, get_string('backtoconnection', 'tool_ltidiagnostics'), ['class' => 'd-block mb-3']);
+echo $back;
 if (!$canrepair) {
     echo html_writer::tag('p', get_string('greplay_dryrun_only', 'tool_ltidiagnostics'), ['class' => 'alert alert-info',
         'id' => 'tool_ltidiagnostics_dryrun_only']);
 }
-$last = count($previews);
-$i = 0;
-foreach ($previews as $p) {
-    $i++;
-    echo $output->preview($p, $i === $last ? $formhtml : '');
-}
-if (!$previews) {
-    echo html_writer::tag('p', get_string('grades_norows', 'tool_ltidiagnostics'), ['class' => 'alert alert-info']);
-}
-if (!$batch && $canrepair && $linkid) {
-    echo html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/repair.php', ['key' => $key, 'link' => $linkid,
-        'batch' => 1]), get_string('greplay_batch_link', 'tool_ltidiagnostics'), ['class' => 'btn btn-secondary mt-3']);
+if ($selection) {
+    echo $output->bulk_preview($previews, $selection, ['key' => $key, 'showscores' => $showscores]);
+    echo $formhtml;
+} else {
+    foreach ($previews as $p) {
+        echo $output->preview($p, $formhtml);
+    }
 }
 echo $output->footer();

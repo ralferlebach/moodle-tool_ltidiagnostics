@@ -79,6 +79,8 @@ class active_checker {
             'url' => $url, 'purpose' => $purpose, 'code' => '', 'dns' => null, 'httpstatus' => 0, 'certexpiry' => null,
             'skew' => null, 'framing' => null, 'jwks' => null, 'redirects' => 0, 'checkedat' => $now,
             'viaproxy' => false, 'pinned' => false, 'pinmode' => '', 'blockreason' => '',
+            // Issue #16: what exactly was checked, how and by whom.
+            'method' => 'GET', 'executor' => 'this_site', 'errno' => 0, 'peer' => '',
         ];
         $reason = url_guard::check($url, $this->allowprivate, $this->exact);
         if ($reason !== url_guard::OK) {
@@ -109,6 +111,8 @@ class active_checker {
         $out['pinned'] = !empty($result->info['pinned']);
         $out['pinmode'] = (string) ($result->info['pinmode'] ?? '');
         $out['httpstatus'] = $result->httpstatus;
+        $out['errno'] = (int) $result->errno;
+        $out['peer'] = (string) ($result->info['primary_ip'] ?? '');
         $out['redirects'] = count($result->redirects);
         if (!empty($result->info['certinfo'])) {
             $out['certexpiry'] = error_classifier::cert_expiry((array) $result->info['certinfo']);

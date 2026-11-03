@@ -46,6 +46,8 @@ admin_externalpage_setup(
 require_capability('tool/ltidiagnostics:view', $context);
 
 $reveal = \tool_ltidiagnostics\local\diagnostic_mode::can_reveal();
+// The detail pages lead back here with the same filters (issue #12).
+\tool_ltidiagnostics\local\navigation::remember_overview(['search' => $search, 'role' => $role, 'courseid' => $courseid]);
 $form = new \tool_ltidiagnostics\form\filter_form(null, null, 'get');
 $form->set_data(['search' => $search, 'role' => $role, 'courseid' => $courseid ?: '']);
 
@@ -54,6 +56,22 @@ $output = $PAGE->get_renderer('tool_ltidiagnostics');
 echo $output->header();
 echo $output->heading(get_string('connections', 'tool_ltidiagnostics'));
 echo html_writer::tag('p', get_string('connections_intro', 'tool_ltidiagnostics'));
+$quick = [];
+if (has_capability('tool/ltidiagnostics:viewsupport', $context)) {
+    $label = get_string('support', 'tool_ltidiagnostics');
+    $quick[] = html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/support.php'), $label);
+}
+if (has_capability('tool/ltidiagnostics:viewprivacy', $context)) {
+    $label = get_string('auditlog', 'tool_ltidiagnostics');
+    $quick[] = html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/audit.php'), $label);
+}
+if (has_capability('tool/ltidiagnostics:importlogs', $context)) {
+    $label = get_string('logimport', 'tool_ltidiagnostics');
+    $quick[] = html_writer::link(new moodle_url('/admin/tool/ltidiagnostics/logimport.php'), $label);
+}
+if ($quick) {
+    echo html_writer::tag('p', implode(' · ', $quick), ['class' => 'small', 'id' => 'tool_ltidiagnostics_quicklinks']);
+}
 if ($reveal) {
     echo $output->notification(get_string('diagmode_active', 'tool_ltidiagnostics', userdate(
         \tool_ltidiagnostics\local\diagnostic_mode::until()

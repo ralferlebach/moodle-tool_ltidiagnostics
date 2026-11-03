@@ -56,7 +56,7 @@ Feature: LTI diagnostics is a read-only administration tool with its own capabil
     And I log in as "admin"
     When I visit "/admin/tool/ltidiagnostics/index.php"
     And I click on "Open" "link" in the "Diag tool" "table_row"
-    And I click on "Health check" "link"
+    And I click on "Connection diagnosis" "link"
     Then I should see "What was checked"
     And I should see "Traffic light per layer"
     And I should see "What can be seen"
@@ -70,14 +70,14 @@ Feature: LTI diagnostics is a read-only administration tool with its own capabil
     Then "table caption" "css_element" should exist
     And "th[scope='col']" "css_element" should exist
 
-  Scenario: The capability matrix and the evidence tab are reachable by link and show their tables
+  Scenario: The function check and the evidence tab are reachable by link and show their tables
     Given the following "mod_lti > tool types" exist:
       | name      | baseurl                          | coursevisible | state |
       | Diag tool | https://tool.example.org/launch  | 2             | 1     |
     And I log in as "admin"
     When I visit "/admin/tool/ltidiagnostics/index.php"
     And I click on "Open" "link" in the "Diag tool" "table_row"
-    Then I should see "Capability matrix"
+    Then I should see "Function check"
     When I click on "Evidence sources" "link"
     Then I should see "What can be seen"
     And "th[scope='col']" "css_element" should exist

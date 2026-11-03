@@ -37,7 +37,7 @@ class replay_form extends \moodleform {
         $mform = $this->_form;
         foreach (
             ['key' => PARAM_RAW, 'link' => PARAM_INT, 'user' => PARAM_INT, 'attempt' => PARAM_ALPHANUMEXT,
-                'mode' => PARAM_ALPHA, 'targets' => PARAM_RAW] as $name => $type
+                'mode' => PARAM_ALPHA, 'targets' => PARAM_RAW, 'sel' => PARAM_ALPHANUM] as $name => $type
         ) {
             $mform->addElement('hidden', $name, $this->_customdata[$name] ?? '');
             $mform->setType($name, $type);

@@ -102,13 +102,14 @@ class grades_renderer extends \plugin_renderer_base {
     /**
      * Grade channel tab of a tool side connection.
      *
-     * @param array $d Result of grade_diagnosis::run().
-     * @param array $journal Result of journal::page().
+     * @param array $d Result of grade_diagnosis::run() (prerequisites and findings; rows are in the section).
+     * @param string $rowshtml Rendered section "resource links and learners".
+     * @param string $journalhtml Rendered section "journal".
      * @param array $ctx key, canrepair (bool), repairstate (array site, optin, capability), canresult (bool),
-     *     canoptin (bool), pageurl (moodle_url), showscores (bool).
+     *     canoptin (bool), scope (scope).
      * @return string
      */
-    public function grades_tab(array $d, array $journal, array $ctx): string {
+    public function grades_tab(array $d, string $rowshtml, string $journalhtml, array $ctx): string {
         $o = html_writer::tag('p', self::t('grades_intro'), ['class' => 'lead']);
         if (!$d['applicable']) {
             return $o . html_writer::tag('p', self::t('grades_notapplicable'), ['class' => 'alert alert-info',
@@ -117,25 +118,312 @@ class grades_renderer extends \plugin_renderer_base {
         $o .= html_writer::tag('p', self::t('grades_ladder'), ['class' => 'small text-muted']);
         $o .= $this->prerequisites($d['prerequisites'], $d['resources']);
         $o .= $this->output->heading(self::t('grades_findings'), 3);
+        $o .= html_writer::tag('p', self::t('grades_findings_scope', (object) ['used' => count($d['rows']),
+            'total' => (int) $d['total']]), ['class' => 'small text-muted', 'id' => 'tool_ltidiagnostics_findings_basis']);
         $o .= $this->findings($d['findings']);
-        $o .= $this->output->heading(self::t('grades_rows'), 3);
-        $o .= html_writer::tag('p', self::t('grades_rows_desc', (object) ['total' => $d['total'],
-            'from' => $d['total'] ? $d['offset'] + 1 : 0, 'to' => $d['offset'] + count($d['rows'])]));
-        $o .= $this->rows($d, $ctx);
-        $o .= $this->pager($ctx['pageurl'], $d['offset'], $d['limit'], $d['total']);
-        $o .= $this->output->heading(self::t('grades_journal'), 3);
+        $o .= $this->output->heading(self::t('grades_rows'), 3, '', 'tool_ltidiagnostics_rows');
+        $o .= $rowshtml;
+        $o .= $this->output->heading(self::t('grades_journal'), 3, '', 'tool_ltidiagnostics_journal');
         $o .= html_writer::tag('p', self::t('grades_journal_desc'), ['class' => 'small text-muted']);
-        $o .= $this->journal($journal['rows'], $ctx);
-        if ($journal['next']) {
-            $o .= html_writer::link(
-                new moodle_url($ctx['pageurl'], ['before' => $journal['next']]),
-                self::t('grades_older'),
-                ['class' => 'btn btn-secondary btn-sm']
-            );
-        }
+        $o .= $journalhtml;
         $o .= $this->repair_panel($ctx);
         return $o;
     }
+
+    /**
+     * Section "resource links and learners": filter form, counters per dimension, rows, selection, pager.
+     *
+     * @param array $d Diagnosis.
+     * @param array $ctx Grade context plus baseurl, params, filters, perpage, offset, scope.
+     * @return string
+     */
+    public function rows_section(array $d, array $ctx): string {
+        $f = $ctx['filters'];
+        $o = $this->filter_form($ctx['baseurl'], 'grades_rows', [
+            ['fgradesync', self::t('gf_gradesync'), ['' => self::t('gf_any'), '1' => self::t('gpre_gradesync_on'),
+                '0' => self::t('gpre_gradesync_off')], $f['gradesync']],
+            ['fgrade', self::t('gf_grade'), ['' => self::t('gf_any')] + self::options(
+                'gcnt_grade_',
+                \tool_ltidiagnostics\local\grades\pair_query::GRADE
+            ), $f['grade']],
+            ['ftransfer', self::t('gf_transfer'), ['' => self::t('gf_any')] + self::options(
+                'gcnt_transfer_',
+                \tool_ltidiagnostics\local\grades\pair_query::TRANSFER
+            ), $f['transfer']],
+            ['fbooking', self::t('gf_booking'), ['' => self::t('gf_any')] + self::options(
+                'gcnt_booking_',
+                \tool_ltidiagnostics\local\grades\pair_query::BOOKING
+            ), $f['booking']],
+        ], array_filter(['fuser' => $f['userid'], 'flink' => $f['linkid']]), [
+            'search' => !empty($ctx['names']) ? ['fsearch', self::t('gf_search'), $f['usersearch']] : null,
+            'perpage' => ['perpage', $ctx['perpage']],
+        ]);
+        if ($f['userid'] || $f['linkid']) {
+            $o .= html_writer::tag('p', self::t('gf_pairfilter') . ' ' . html_writer::link(
+                new moodle_url($ctx['baseurl'], array_diff_key($ctx['params'], ['fuser' => 1, 'flink' => 1])),
+                self::t('gf_pairfilter_clear'),
+                ['class' => 'ltidiag-nav']
+            ), ['class' => 'small']);
+        }
+        $o .= $this->counters($d['counters'], (int) $d['total'], $ctx);
+        $o .= html_writer::tag(
+            'p',
+            self::t('grades_rows_desc', (object) ['total' => $d['total'],
+            'from' => $d['total'] ? $ctx['offset'] + 1 : 0, 'to' => $ctx['offset'] + count($d['rows'])]),
+            ['id' => 'tool_ltidiagnostics_rows_count', 'data-total' => (int) $d['total']]
+        );
+        $table = $this->rows($d, $ctx + ['selectable' => true]);
+        if (!empty($ctx['canrepair']) && $d['rows']) {
+            $max = \tool_ltidiagnostics\local\config::bounded('repairbatchmax');
+            $hidden = ['key' => $ctx['key'], 'action' => 'select', 'sesskey' => sesskey(),
+                'displayed' => implode(',', array_map(fn($r) => $r['linkid'] . ':' . $r['userid'], $d['rows']))]
+                + $ctx['scope']->params() + array_filter(['fgrade' => $f['grade'], 'ftransfer' => $f['transfer'],
+                'fbooking' => $f['booking'], 'fgradesync' => $f['gradesync'], 'fuser' => $f['userid'], 'flink' => $f['linkid'],
+                'fsearch' => !empty($ctx['names']) ? $f['usersearch'] : '',
+                'perpage' => $ctx['perpage'] ?? 0, 'offset' => $ctx['offset'] ?? 0]);
+            $inputs = '';
+            foreach ($hidden as $name => $value) {
+                $inputs .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $name, 'value' => $value]);
+            }
+            $buttons = html_writer::tag('button', self::t('gsel_rows'), ['type' => 'submit', 'name' => 'selectmode',
+                'value' => 'rows', 'class' => 'btn btn-secondary mr-2 me-2 mb-1'])
+                . html_writer::tag('button', self::t('gsel_page', count($d['rows'])), ['type' => 'submit',
+                'name' => 'selectmode', 'value' => 'page', 'class' => 'btn btn-secondary mr-2 me-2 mb-1']);
+            if ($d['total'] <= $max) {
+                $buttons .= html_writer::tag('button', self::t('gsel_matches', $d['total']), ['type' => 'submit',
+                    'name' => 'selectmode', 'value' => 'matches', 'class' => 'btn btn-secondary mb-1']);
+            } else {
+                $buttons .= html_writer::span(
+                    self::t('gsel_matches_toolarge', (object) ['count' => $d['total'], 'max' => $max]),
+                    'small text-muted'
+                );
+            }
+            $o .= $table . html_writer::tag('form', $inputs . html_writer::div(html_writer::tag(
+                'p',
+                self::t('gsel_desc'),
+                ['class' => 'small text-muted mb-1']
+            ) . $buttons, 'mb-2'), ['method' => 'post',
+                'action' => (new moodle_url('/admin/tool/ltidiagnostics/repair.php'))->out(false),
+                'id' => 'tool_ltidiagnostics_selection']);
+        } else {
+            $o .= $table;
+        }
+        $o .= $this->offset_pager($ctx['baseurl'], $ctx['params'], 'offset', $ctx['offset'], $ctx['perpage'], (int) $d['total']);
+        return $o;
+    }
+
+    /**
+     * Counters of the population per dimension (disjoint inside a dimension; dimensions are not summed).
+     *
+     * @param array $c Counters.
+     * @param int $total Total of the population.
+     * @param array $ctx Context (baseurl, params).
+     * @return string
+     */
+    private function counters(array $c, int $total, array $ctx): string {
+        $o = '';
+        $filtername = ['grade' => 'fgrade', 'transfer' => 'ftransfer', 'booking' => 'fbooking'];
+        $cells = [];
+        foreach (['grade', 'transfer', 'booking'] as $dim) {
+            $rows = [];
+            foreach ($c[$dim] as $value => $n) {
+                $h = new html_table_cell(html_writer::link(
+                    new moodle_url($ctx['baseurl'], [$filtername[$dim] => $value] +
+                    array_diff_key($ctx['params'], ['offset' => 1])),
+                    self::t('gcnt_' . $dim . '_' . $value),
+                    ['class' => 'ltidiag-nav']
+                ));
+                $h->header = true;
+                $h->scope = 'row';
+                $row = new html_table_row([$h, (string) $n]);
+                $row->attributes['data-dim'] = $dim;
+                $row->attributes['data-value'] = $value;
+                $rows[] = $row;
+            }
+            $table = new html_table();
+            $table->id = 'tool_ltidiagnostics_cnt_' . $dim;
+            $table->attributes['class'] = 'generaltable table-sm mb-1';
+            $table->caption = self::t('gcnt_' . $dim);
+            $table->head = [self::t('gcnt_value'), self::t('gcount')];
+            $table->data = $rows;
+            $cells[] = html_writer::div(html_writer::table($table) . html_writer::tag(
+                'p',
+                self::t('gcnt_' . $dim . '_src'),
+                ['class' => 'small text-muted']
+            ), 'col-md-4');
+        }
+        $o .= html_writer::div(implode('', $cells), 'row', ['id' => 'tool_ltidiagnostics_counters', 'data-total' => $total]);
+        $o .= html_writer::tag(
+            'p',
+            self::t('gcnt_note', userdate(time(), get_string('strftimedatetimeshort'))),
+            ['class' => 'small text-muted']
+        );
+        return $o;
+    }
+
+    /**
+     * Section "journal": filters, rows, keyset pager.
+     *
+     * @param array $page Result of journal::page().
+     * @param array $ctx Grade context plus baseurl, params, perpage, before, scope.
+     * @return string
+     */
+    public function journal_section(array $page, array $ctx): string {
+        $p = $ctx['params'];
+        $o = $this->filter_form($ctx['baseurl'], 'grades_journal', [
+            ['jorigin', self::t('gj_origin'), ['' => self::t('gf_any'), 'core' => self::t('gj_origin_core'),
+                'replay' => self::t('gj_origin_replay')], $p['jorigin'] ?? ''],
+            ['jtransfer', self::t('gj_transfer'), ['' => self::t('gf_any')] + self::options(
+                'gcnt_transfer_',
+                ['skipped', 'pending', 'accepted', 'failed']
+            ), $p['jtransfer'] ?? ''],
+            ['jattr', self::t('gj_attr'), ['' => self::t('gf_any'), 'attributed' => self::t('gj_attr_attributed'),
+                'unattributed' => self::t('gj_attr_unattributed')], $p['jattr'] ?? ''],
+        ], array_filter(['jlink' => $p['jlink'] ?? 0, 'juser' => $p['juser'] ?? 0]), [
+            'perpage' => ['jperpage', $ctx['perpage']],
+        ]);
+        if (!empty($p['jlink']) || !empty($p['juser'])) {
+            $o .= html_writer::tag('p', self::t('gj_pairfilter', (object) [
+                'link' => (int) ($p['jlink'] ?? 0),
+                'person' => !empty($p['juser']) ? s(\tool_ltidiagnostics\local\identity::person(
+                    $ctx['key'],
+                    (int) $p['juser'],
+                    !empty($ctx['names'])
+                )) : self::t('gf_any'),
+            ]) . ' ' . html_writer::link(
+                new moodle_url($ctx['baseurl'], array_diff_key($p, ['jlink' => 1, 'juser' => 1])),
+                self::t('gf_pairfilter_clear'),
+                ['class' => 'ltidiag-nav']
+            ), ['class' => 'small',
+                'id' => 'tool_ltidiagnostics_journal_pair']);
+        }
+        if (!$ctx['scope']->is_empty()) {
+            $o .= html_writer::tag('p', self::t('gj_scope'), ['class' => 'small text-muted']);
+        }
+        $o .= html_writer::tag(
+            'p',
+            self::t('gj_count', (object) ['shown' => count($page['rows']), 'total' => $page['total']]),
+            ['id' => 'tool_ltidiagnostics_journal_count', 'data-total' => (int) $page['total']]
+        );
+        $o .= $this->journal($page['rows'], $ctx);
+        $links = [];
+        if (!empty($ctx['before'])) {
+            $links[] = html_writer::link(
+                new moodle_url($ctx['baseurl'], $p),
+                self::t('gj_newest'),
+                ['class' => 'btn btn-secondary btn-sm mr-2 me-2 ltidiag-nav']
+            );
+        }
+        if ($page['next']) {
+            $links[] = html_writer::link(
+                new moodle_url($ctx['baseurl'], $p + ['jbefore' => $page['next']]),
+                self::t('grades_older'),
+                ['class' => 'btn btn-secondary btn-sm ltidiag-nav']
+            );
+        }
+        if ($links) {
+            $o .= html_writer::div(implode('', $links), 'mb-3');
+        }
+        return $o;
+    }
+
+    /**
+     * Options of a select from string ids.
+     *
+     * @param string $prefix String prefix.
+     * @param string[] $values Values.
+     * @return array value => label
+     */
+    private static function options(string $prefix, array $values): array {
+        $out = [];
+        foreach ($values as $v) {
+            $out[$v] = self::t($prefix . $v);
+        }
+        return $out;
+    }
+
+    /**
+     * GET filter form of a section (works without JavaScript; the AMD module submits it asynchronously).
+     *
+     * @param moodle_url $base Page URL with scope.
+     * @param string $section Section.
+     * @param array $selects Each [name, label, options, value].
+     * @param array $hidden Extra hidden values.
+     * @param array $extra search ([name, label, value] or null), perpage ([name, value]).
+     * @return string
+     */
+    public function filter_form(moodle_url $base, string $section, array $selects, array $hidden, array $extra): string {
+        $fields = '';
+        foreach ($base->params() + $hidden as $name => $value) {
+            $fields .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $name, 'value' => $value]);
+        }
+        foreach ($selects as [$name, $label, $options, $value]) {
+            $id = 'ltidiag-' . $section . '-' . $name;
+            $fields .= html_writer::div(
+                html_writer::label($label, $id, false, ['class' => 'mr-1 me-1']) .
+                html_writer::select($options, $name, $value, false, ['id' => $id, 'class' => 'custom-select form-select']),
+                'mr-2 me-2 mb-2 d-inline-block'
+            );
+        }
+        if (!empty($extra['search'])) {
+            [$name, $label, $value] = $extra['search'];
+            $id = 'ltidiag-' . $section . '-' . $name;
+            $fields .= html_writer::div(html_writer::label($label, $id, false, ['class' => 'mr-1 me-1']) .
+                html_writer::empty_tag('input', ['type' => 'search', 'name' => $name, 'id' => $id, 'value' => $value,
+                    'class' => 'form-control d-inline-block w-auto']), 'mr-2 me-2 mb-2 d-inline-block');
+        }
+        if (!empty($extra['perpage'])) {
+            [$name, $value] = $extra['perpage'];
+            $id = 'ltidiag-' . $section . '-' . $name;
+            $options = [];
+            foreach (sections::SIZES as $size) {
+                $options[$size] = (string) $size;
+            }
+            $fields .= html_writer::div(
+                html_writer::label(self::t('perpage'), $id, false, ['class' => 'mr-1 me-1']) .
+                html_writer::select($options, $name, $value, false, ['id' => $id, 'class' => 'custom-select form-select']),
+                'mr-2 me-2 mb-2 d-inline-block'
+            );
+        }
+        $fields .= html_writer::tag('button', self::t('filter'), ['type' => 'submit', 'class' => 'btn btn-secondary mb-2']);
+        $fields .= ' ' . html_writer::link($base, self::t('filter_reset'), ['class' => 'ltidiag-nav mb-2 d-inline-block']);
+        return html_writer::tag('form', $fields, ['method' => 'get', 'action' => $base->out_omit_querystring(),
+            'class' => 'ltidiag-filter mb-2', 'role' => 'search', 'aria-label' => self::t('filter_label_' . $section)]);
+    }
+
+    /**
+     * Offset pager with the page parameters.
+     *
+     * @param moodle_url $base Base URL.
+     * @param array $params Parameters.
+     * @param string $name Offset parameter.
+     * @param int $offset Offset.
+     * @param int $limit Limit.
+     * @param int $total Total.
+     * @return string
+     */
+    public function offset_pager(moodle_url $base, array $params, string $name, int $offset, int $limit, int $total): string {
+        $links = [];
+        $params = array_diff_key($params, [$name => 1]);
+        if ($offset > 0) {
+            $prev = max(0, $offset - $limit);
+            $links[] = html_writer::link(
+                new moodle_url($base, $params + ($prev ? [$name => $prev] : [])),
+                self::t('gprevpage'),
+                ['class' => 'btn btn-secondary btn-sm mr-2 me-2 ltidiag-nav']
+            );
+        }
+        if ($offset + $limit < $total) {
+            $links[] = html_writer::link(
+                new moodle_url($base, $params + [$name => $offset + $limit]),
+                self::t('gnextpage'),
+                ['class' => 'btn btn-secondary btn-sm ltidiag-nav']
+            );
+        }
+        return $links ? html_writer::tag('nav', implode('', $links), ['class' => 'mb-3',
+            'aria-label' => self::t('pager_label')]) : '';
+    }
+
 
     /**
      * Prerequisites of core's grade sync.
@@ -184,6 +472,7 @@ class grades_renderer extends \plugin_renderer_base {
         $table->id = 'tool_ltidiagnostics_grades_prereq';
         $table->attributes['class'] = 'generaltable table-sm';
         $table->caption = self::t('grades_prereq');
+        $table->captionhide = true;
         $table->head = [self::t('gpre_item'), self::t('gpre_value')];
         $table->data = $rows;
         return $this->output->heading(self::t('grades_prereq'), 3) . html_writer::div(
@@ -240,9 +529,19 @@ class grades_renderer extends \plugin_renderer_base {
      */
     public function rows(array $d, array $ctx): string {
         $rows = [];
+        $select = !empty($ctx['canrepair']) && !empty($ctx['selectable']);
+        $userids = array_map(fn($r) => (int) $r['userid'], $d['rows']);
+        if (!empty($ctx['names'])) {
+            \tool_ltidiagnostics\local\identity::preload($userids);
+        }
         foreach ($d['rows'] as $r) {
             $link = $d['links'][$r['linkid']];
-            $h = new html_table_cell(s($r['person']));
+            $person = !empty($ctx['names']) ? \tool_ltidiagnostics\local\identity::person($ctx['key'], (int) $r['userid'], true)
+                : $r['person'];
+            $h = new html_table_cell(!empty($ctx['names']) ? \tool_ltidiagnostics\local\identity::person_html(
+                $ctx['key'],
+                (int) $r['userid']
+            ) : s($r['person']));
             $h->header = true;
             $h->scope = 'row';
             $src = $r['source'];
@@ -270,7 +569,7 @@ class grades_renderer extends \plugin_renderer_base {
                 );
             }
             if ($ev['httpstatus']) {
-                $evtext .= ' ' . html_writer::span('HTTP ' . (int) $ev['httpstatus'], 'small');
+                $evtext .= ' ' . html_writer::span(self::t('ghttpstatus', (int) $ev['httpstatus']), 'small');
             }
             if ($ev['errorclass'] !== '') {
                 $evtext .= ' ' . html_writer::span(self::label('gerr_', $ev['errorclass']), 'small');
@@ -284,7 +583,7 @@ class grades_renderer extends \plugin_renderer_base {
                 $actions[] = html_writer::link(
                     new moodle_url('/admin/tool/ltidiagnostics/repair.php', ['key' => $ctx['key'],
                     'link' => $r['linkid'], 'user' => $r['userid']]),
-                    self::t('greplay_preview_for', $r['person']),
+                    self::t('greplay_preview_for', s($person)),
                     ['class' => 'btn btn-secondary btn-sm mb-1']
                 );
             }
@@ -294,14 +593,40 @@ class grades_renderer extends \plugin_renderer_base {
                         '/admin/tool/ltidiagnostics/repair.php',
                         ['key' => $ctx['key'], 'link' => $r['linkid'], 'user' => $r['userid'], 'action' => 'checkresult']
                     ),
-                    self::t('gcheckresult_for', $r['person']),
+                    self::t('gcheckresult_for', $person),
                     'post',
                     ['class' => 'mb-1']
                 );
             }
-            $row = new html_table_row([
+            if (!empty($ctx['baseurl'])) {
+                $actions[] = html_writer::link(
+                    new moodle_url(
+                        $ctx['baseurl'],
+                        ['jlink' => $r['linkid'], 'juser' => $r['userid']],
+                        'tool_ltidiagnostics_journal'
+                    ),
+                    self::t('gjournal_for', s($person)),
+                    ['class' => 'd-block small', 'data-ltidiag-target' => 'grades_journal',
+                        'data-ltidiag-pair' => $r['linkid'] . ':' . $r['userid']]
+                );
+            }
+            $res = $d['resources'][$link['toolid']] ?? null;
+            $where = $res ? \tool_ltidiagnostics\local\identity::cm_html((int) $res['cmid'])
+                ?: \tool_ltidiagnostics\local\identity::course_html((int) $res['courseid']) : '';
+            $cells = [];
+            if ($select) {
+                // The selection form stands after the table (rows hold forms of their own, and forms must not nest); the
+                // checkboxes belong to it through the form attribute.
+                $cells[] = html_writer::empty_tag('input', ['type' => 'checkbox', 'name' => 'pairs[]',
+                    'form' => 'tool_ltidiagnostics_selection',
+                    'value' => $r['linkid'] . ':' . $r['userid'], 'class' => 'ltidiag-pair',
+                    'id' => 'ltidiag-pair-' . $r['linkid'] . '-' . $r['userid'],
+                    'aria-label' => self::t('gsel_mark', (object) ['person' => $person, 'link' => $link['resourcelinkid']])]);
+            }
+            $row = new html_table_row(array_merge($cells, [
                 $h,
-                s($link['resourcelinkid']) . html_writer::empty_tag('br') . html_writer::span(
+                ($where !== '' ? $where . html_writer::empty_tag('br') : '') .
+                self::t('gplatformlink', s($link['resourcelinkid'])) . html_writer::empty_tag('br') . html_writer::span(
                     self::scope_text($link),
                     'small text-muted'
                 ),
@@ -311,7 +636,7 @@ class grades_renderer extends \plugin_renderer_base {
                 $evtext,
                 implode(' ', $risks) ?: '-',
                 implode(' ', $actions) ?: '-',
-            ]);
+            ]));
             $row->attributes['data-prediction'] = $r['prediction'];
             $row->attributes['data-evidence'] = $ev['level'];
             $row->attributes['data-risks'] = implode(' ', $r['risks']);
@@ -325,9 +650,14 @@ class grades_renderer extends \plugin_renderer_base {
         $table->captionhide = true;
         $table->head = [self::t('gperson'), self::t('glink'), self::t('gprediction'), self::t('gsourcegrade'),
             self::t('gmapping'), self::t('gevidence'), self::t('grisks'), self::t('actions')];
+        if ($select) {
+            array_unshift($table->head, html_writer::empty_tag('input', ['type' => 'checkbox', 'class' => 'ltidiag-pair-all',
+                'id' => 'ltidiag-pair-all', 'aria-label' => self::t('gsel_markall')]));
+        }
         $table->data = $rows;
         if (!$rows) {
-            return html_writer::tag('p', self::t('grades_norows'), ['class' => 'alert alert-info']);
+            return html_writer::tag('p', self::t('grades_norows'), ['class' => 'alert alert-info',
+                'id' => 'tool_ltidiagnostics_grades_norows']);
         }
         return html_writer::div(html_writer::table($table), 'table-responsive');
     }
@@ -361,6 +691,10 @@ class grades_renderer extends \plugin_renderer_base {
                 'id' => 'tool_ltidiagnostics_grades_nojournal']);
         }
         $data = [];
+        if (!empty($ctx['names'])) {
+            // One query for the names of the page, not one per row.
+            \tool_ltidiagnostics\local\identity::preload(array_map(fn($j) => (int) $j->userid, $rows));
+        }
         foreach ($rows as $j) {
             $h = new html_table_cell(userdate((int) $j->timecreated, get_string('strftimedatetimeshort')));
             $h->header = true;
@@ -373,7 +707,7 @@ class grades_renderer extends \plugin_renderer_base {
                 : (in_array($j->state, ['http_rejected', 'dead', 'aborted'], true) ? 'red' : 'grey'));
             $detail = [];
             if ((int) $j->httpstatus) {
-                $detail[] = 'HTTP ' . (int) $j->httpstatus;
+                $detail[] = self::t('ghttpstatus', (int) $j->httpstatus);
             }
             if ($j->errorclass !== '') {
                 $detail[] = self::label('gerr_', $j->errorclass);
@@ -391,10 +725,14 @@ class grades_renderer extends \plugin_renderer_base {
             }
             $row = new html_table_row([
                 $h,
-                html_writer::tag('code', s(substr((string) $j->attemptid, 0, 8))) . ' #' . (int) $j->attemptno,
+                self::t('gattempt_label', (object) ['id' => substr((string) $j->attemptid, 0, 8),
+                    'no' => (int) $j->attemptno]),
                 self::label('gorigin_', $j->origin) . ' / ' . self::label('gsrc_', $j->source),
                 (int) $j->resourcelinkrowid ? (string) (int) $j->resourcelinkrowid : self::t('gunattributed'),
-                s(\tool_ltidiagnostics\local\grades\grade_diagnosis::pseudonym(
+                !empty($ctx['names']) ? \tool_ltidiagnostics\local\identity::person_html(
+                    (string) ($j->connkey ?: $ctx['key']),
+                    (int) $j->userid
+                ) : s(\tool_ltidiagnostics\local\grades\grade_diagnosis::pseudonym(
                     (string) ($j->connkey ?: $ctx['key']),
                     (int) $j->userid
                 )),
@@ -414,7 +752,7 @@ class grades_renderer extends \plugin_renderer_base {
             $data[] = $row;
         }
         $table = new html_table();
-        $table->id = 'tool_ltidiagnostics_grades_journal';
+        $table->id = $ctx['tableid'] ?? 'tool_ltidiagnostics_grades_journal';
         $table->attributes['class'] = 'generaltable table-sm';
         $table->caption = self::t('grades_journal');
         $table->captionhide = true;
@@ -516,6 +854,94 @@ class grades_renderer extends \plugin_renderer_base {
     }
 
     /**
+     * Preview of a selection (issue #22): every target with its line item, score, mapping and the reason why it would be
+     * queued or not; nothing has been sent.
+     *
+     * @param array $previews "linkid:userid" => preview (with linkid, userid).
+     * @param array $selection Selection (pairs, origin, created, expires).
+     * @param array $ctx key, showscores.
+     * @return string
+     */
+    public function bulk_preview(array $previews, array $selection, array $ctx): string {
+        $o = $this->output->heading(self::t('gbulk_title'), 3);
+        $o .= html_writer::tag('p', self::t('gbulk_desc', (object) [
+            'count' => count($previews),
+            'origin' => self::t('gsel_origin_' . $selection['origin']),
+            'expires' => userdate($selection['expires'], get_string('strftimedatetimeshort')),
+        ]), ['id' => 'tool_ltidiagnostics_bulk_summary']);
+        $rows = [];
+        $ready = 0;
+        \tool_ltidiagnostics\local\identity::preload(array_map(fn($p) => (int) $p['userid'], $previews));
+        foreach ($previews as $id => $p) {
+            $h = new html_table_cell(\tool_ltidiagnostics\local\identity::person_html($ctx['key'], (int) $p['userid']));
+            $h->header = true;
+            $h->scope = 'row';
+            $d = $p['display'] ?? [];
+            if ($p['blockers']) {
+                $state = self::badge(self::t('gbulk_blocked'), 'red') . ' ' . s(implode(', ', array_map(
+                    fn($b) => self::label('gblock_', $b),
+                    $p['blockers']
+                )));
+            } else if (!empty($p['open'])) {
+                $state = self::badge(self::t('gbulk_open'), 'amber');
+            } else {
+                $state = self::badge(self::t('gbulk_ready'), 'green');
+                $ready++;
+            }
+            $score = '-';
+            if (!empty($ctx['showscores']) && $d && $d['grade'] !== null) {
+                $score = s(format_float((float) $d['grade'], 2) . ' / ' . format_float((float) $d['grademax'], 2));
+            } else if ($d) {
+                $score = self::t('gsource_' . $d['gradestate']);
+            }
+            $row = new html_table_row([$h, $d ? s($d['resourcelinkid']) : (string) (int) $p['linkid'],
+                $d && $d['lineitem'] !== '' ? s($d['lineitem']) : self::t('gpv_lineitem_none'), $score,
+                $d ? self::t('gmap_' . ($d['mapping'] ?: 'unknown')) : '-', $state]);
+            $row->attributes['data-target'] = $id;
+            $row->attributes['data-ready'] = (!$p['blockers'] && empty($p['open'])) ? '1' : '0';
+            $rows[] = $row;
+        }
+        $table = new html_table();
+        $table->id = 'tool_ltidiagnostics_bulk_preview';
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->caption = self::t('gbulk_title');
+        $table->head = [self::t('gperson'), self::t('glink'), self::t('gpv_lineitem'), self::t('gpv_score'),
+            self::t('gmapping'), self::t('gbulk_state')];
+        $table->data = $rows;
+        $o .= html_writer::div(html_writer::table($table), 'table-responsive');
+        $o .= html_writer::tag(
+            'p',
+            self::t('gbulk_effect', (object) ['ready' => $ready, 'skipped' => count($previews) - $ready]),
+            ['class' => 'alert alert-info', 'id' => 'tool_ltidiagnostics_bulk_effect', 'data-ready' => $ready]
+        );
+        return $o;
+    }
+
+    /**
+     * Status of a confirmed selection: every attempt with its own state and booking.
+     *
+     * @param \stdClass[] $rows Journal rows of the batch.
+     * @param array $ctx key, showscores.
+     * @return string
+     */
+    public function batch_status(array $rows, array $ctx): string {
+        if (!$rows) {
+            return html_writer::tag('p', self::t('gbatch_none'), ['class' => 'alert alert-info']);
+        }
+        $counts = [];
+        foreach ($rows as $j) {
+            $counts[$j->state] = ($counts[$j->state] ?? 0) + 1;
+        }
+        $items = [];
+        foreach ($counts as $state => $n) {
+            $items[] = self::t('gstate_' . $state) . ': ' . $n;
+        }
+        $o = html_writer::tag('p', s(implode(' · ', $items)), ['id' => 'tool_ltidiagnostics_batch_counts']);
+        $o .= html_writer::tag('p', self::t('gbatch_note'), ['class' => 'small text-muted']);
+        return $o . $this->journal($rows, $ctx + ['tableid' => 'tool_ltidiagnostics_batch']);
+    }
+
+    /**
      * Detail of one attempt with its chain (retries share the correlation id).
      *
      * @param \stdClass $row Journal row.
@@ -535,9 +961,12 @@ class grades_renderer extends \plugin_renderer_base {
         };
         $add(self::t('gattempt'), html_writer::tag('code', s($row->attemptid)));
         $add(self::t('gcorrelation'), html_writer::tag('code', s($row->correlationid)));
-        $add(self::t('gorigin'), self::label('gorigin_', $row->origin) . ' #' . (int) $row->attemptno);
-        $add(self::t('gstate'), self::t('gstate_' . $row->state) . ((int) $row->httpstatus ? ' (HTTP ' . (int) $row->httpstatus .
-            ')' : '') . ($row->errorclass !== '' ? ' - ' . self::label('gerr_', $row->errorclass) : ''));
+        $add(self::t('gorigin'), self::t('gorigin_try', (object) ['origin' => self::label('gorigin_', $row->origin),
+            'no' => (int) $row->attemptno]));
+        $add(self::t('gstate'), self::t('gstate_' . $row->state) . ((int) $row->httpstatus ? ' (' . self::t(
+            'ghttpstatus',
+            (int) $row->httpstatus
+        ) . ')' : '') . ($row->errorclass !== '' ? ' - ' . self::label('gerr_', $row->errorclass) : ''));
         $add(self::t('gtoken'), self::label('gtoken_', $row->tokenstatus));
         if ($showscores && $row->scoregiven !== null) {
             $add(self::t('gscore'), s(format_float((float) $row->scoregiven, 5) . ' / ' . format_float((float) $row->scoremax, 5)));
@@ -559,7 +988,7 @@ class grades_renderer extends \plugin_renderer_base {
         if (count($chain) > 1) {
             $items = [];
             foreach ($chain as $c) {
-                $items[] = '#' . (int) $c->attemptno . ' ' . self::t('gstate_' . $c->state) . ' ' .
+                $items[] = self::t('gtry', (int) $c->attemptno) . ' ' . self::t('gstate_' . $c->state) . ' ' .
                     userdate((int) $c->timecreated, get_string('strftimedatetimeshort')) .
                     ($c->errorclass !== '' ? ' - ' . self::label('gerr_', $c->errorclass) : '');
             }
@@ -580,6 +1009,18 @@ class grades_renderer extends \plugin_renderer_base {
             $o .= $this->output->heading(self::t('greceipts'), 4) . html_writer::alist(array_map('s', $items));
         }
         return $o;
+    }
+
+    /**
+     * The only output of the completion tab without a working local_lticompletionsync (issues #17, #24): one short
+     * note, no check, no action, no transfer page, no invented link. The grade channel stays fully usable.
+     *
+     * @param string $state State of the plugin (absent, codeonly, needsupgrade, incomplete).
+     * @return string
+     */
+    public function completion_unavailable(string $state): string {
+        return html_writer::tag('p', self::t('compl_state_' . $state), ['class' => 'alert alert-secondary',
+            'id' => 'tool_ltidiagnostics_compl_unavailable', 'data-state' => $state]);
     }
 
     /**
@@ -637,8 +1078,15 @@ class grades_renderer extends \plugin_renderer_base {
 
         // Rows.
         $data = [];
+        $names = \tool_ltidiagnostics\local\identity::can_see_names();
+        if ($names) {
+            \tool_ltidiagnostics\local\identity::preload(array_map(fn($r) => (int) ($r['userid'] ?? 0), $v['rows']));
+        }
         foreach ($v['rows'] as $r) {
-            $h = new html_table_cell(s($r['person']));
+            $h = new html_table_cell($names && !empty($r['userid']) ? \tool_ltidiagnostics\local\identity::person_html(
+                (string) $pageurl->param('key'),
+                (int) $r['userid']
+            ) : s($r['person']));
             $h->header = true;
             $h->scope = 'row';
             if ($v['role'] === 'sender') {

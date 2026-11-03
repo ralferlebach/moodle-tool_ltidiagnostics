@@ -17,21 +17,29 @@
 {{!
     @template tool_ltidiagnostics/matrix
 
-    Capability matrix with the evidence ladder for each feature.
+    Function check: per service the evidence ladder, what the check needs, how to produce the missing evidence and
+    drill-down links with their effect (read only or mutating).
 
     Example context (json):
     {
-        "caption": "Capability matrix",
+        "caption": "Function check",
+        "intro": "Each row is one LTI service.",
+        "limits": "A status is only as strong as its evidence.",
         "headers": {"feature": "Feature", "status": "Status", "reason": "Why", "next": "Next safe step", "ladder": "Evidence ladder",
-            "step": "Step", "state": "State", "kind": "Evidence", "detail": "Detail"},
+            "step": "Step", "state": "State", "kind": "Evidence", "detail": "Detail", "howto": "How to produce the evidence",
+            "actions": "Go to"},
         "rows": [
-            {"label": "Assignment and Grade Services", "status": "configured", "statuslabel": "Configured", "badge": "bg-warning text-dark",
-             "reason": "Switched on locally, not yet observed.", "next": "Perform a launch.",
+            {"feature": "ags", "label": "Assignment and Grade Services", "status": "configured", "statuslabel": "Configured",
+             "badge": "bg-warning text-dark", "reason": "Switched on locally, not yet observed.", "next": "Perform a launch.",
+             "checks": "Scope, source grade, core task, POST, consumer result.",
+             "hashowto": true, "hasactions": true, "howto": [{"text": "Grade a learner."}],
+             "actions": [{"label": "Grades (AGS)", "url": "#", "effect": "readonly", "effectlabel": "read only"}],
              "notes": [{"text": "Remote side cannot be observed."}],
-             "steps": [{"stepname": "Local switch", "state": "Yes", "kind": "config", "detail": "Mode full", "time": ""}]}
+             "steps": [{"step": "local", "stepname": "Local switch", "state": "Yes", "kind": "config", "detail": "Mode full", "time": ""}]}
         ]
     }
 }}
+<p class="text-muted">{{intro}}</p>
 <div class="table-responsive">
 <table class="table generaltable" id="tool_ltidiagnostics_matrix">
     <caption>{{caption}}</caption>
@@ -50,6 +58,7 @@
             <td><span class="badge {{badge}}">{{statuslabel}}</span></td>
             <td>
                 {{reason}}
+                {{#checks}}<div class="small">{{checks}}</div>{{/checks}}
                 {{#notes}}<div class="small text-muted">{{text}}</div>{{/notes}}
                 <details>
                     <summary>{{headers.ladder}}</summary>
@@ -75,10 +84,28 @@
                         </tbody>
                     </table>
                 </details>
+                {{#hashowto}}
+                <details class="ltidiag-howto" data-howto="{{feature}}">
+                    <summary>{{headers.howto}}</summary>
+                    <ol class="small">
+                        {{#howto}}<li>{{text}}</li>{{/howto}}
+                    </ol>
+                </details>
+                {{/hashowto}}
             </td>
-            <td>{{next}}</td>
+            <td>
+                {{next}}
+                {{#hasactions}}
+                <ul class="list-unstyled small mt-1 mb-0" aria-label="{{headers.actions}}: {{label}}">
+                    {{#actions}}
+                    <li><a href="{{url}}" data-effect="{{effect}}">{{label}}</a> <span class="badge bg-light text-dark border">{{effectlabel}}</span></li>
+                    {{/actions}}
+                </ul>
+                {{/hasactions}}
+            </td>
         </tr>
         {{/rows}}
     </tbody>
 </table>
 </div>
+<p class="text-muted">{{limits}}</p>

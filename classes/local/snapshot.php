@@ -133,7 +133,13 @@ class snapshot {
         global $DB, $USER;
         $clean = [];
         foreach ($probes as $purpose => $p) {
-            unset($p['dns'], $p['url']);
+            // The target is kept for the check result (issue #16): the configured endpoint without credentials and
+            // without query values, and the resolved addresses (infrastructure data, no personal data).
+            $p['url'] = isset($p['url']) ? redactor::url((string) $p['url'], true) : '';
+            $p['dns'] = array_values(array_filter(
+                array_slice((array) ($p['dns'] ?? []), 0, 8),
+                fn($ip) => filter_var((string) $ip, FILTER_VALIDATE_IP) !== false
+            ));
             $clean[$purpose] = $p;
         }
         $json = json_encode($clean);

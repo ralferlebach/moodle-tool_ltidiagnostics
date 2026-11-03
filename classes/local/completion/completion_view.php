@@ -45,6 +45,40 @@ class completion_view {
     public const PAGESIZE = 100;
 
     /**
+     * State of the completion plugin on this site (issues #17, #24): absent (no code), codeonly (code, not installed),
+     * needsupgrade (installed version older than the code), incomplete (installed but its tables are missing) or present.
+     * Only "present" makes the completion channel applicable; every other state means: no completion check, no action, no
+     * transfer report.
+     *
+     * @return string
+     */
+    public static function state(): string {
+        if (\core_component::get_component_directory(self::COMPONENT) === null) {
+            return 'absent';
+        }
+        $info = \core_plugin_manager::instance()->get_plugin_info(self::COMPONENT);
+        if (!$info || empty($info->versiondb)) {
+            return 'codeonly';
+        }
+        if (!empty($info->versiondisk) && (int) $info->versiondb < (int) $info->versiondisk) {
+            return 'needsupgrade';
+        }
+        if (!self::installed()) {
+            return 'incomplete';
+        }
+        return 'present';
+    }
+
+    /**
+     * True when the completion channel is applicable on this site.
+     *
+     * @return bool
+     */
+    public static function functional(): bool {
+        return self::state() === 'present';
+    }
+
+    /**
      * Whether the completion plugin's data is there (its tables exist). Reading needs nothing else.
      *
      * @return bool
@@ -129,6 +163,26 @@ class completion_view {
         }
         $ids = array_keys($cons);
         [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'c');
+        // Scope (issue #13): sender rows by their source (activity or course), receiver rows by their activity.
+        $courseid = (int) ($options['courseid'] ?? 0);
+        $cmid = (int) ($options['cmid'] ?? 0);
+        $scopesql = '';
+        if ($out['role'] === 'sender' && $cmid) {
+            $scopesql = " AND sourcekind = 'cm' AND sourceid = :scm";
+            $params['scm'] = $cmid;
+        } else if ($out['role'] === 'sender' && $courseid) {
+            $scopesql = " AND ((sourcekind = 'course' AND sourceid = :sc1)
+                           OR (sourcekind = 'cm' AND sourceid IN (SELECT id FROM {course_modules} WHERE course = :sc2)))";
+            $params['sc1'] = $courseid;
+            $params['sc2'] = $courseid;
+        } else if ($cmid) {
+            $scopesql = ' AND cmid = :scm';
+            $params['scm'] = $cmid;
+        } else if ($courseid) {
+            $scopesql = ' AND cmid IN (SELECT id FROM {course_modules} WHERE course = :sc1)';
+            $params['sc1'] = $courseid;
+        }
+        $insql .= $scopesql;
         $limit = max(1, min(500, (int) ($options['limit'] ?? self::PAGESIZE)));
         $offset = max(0, (int) ($options['offset'] ?? 0));
         $out['offset'] = $offset;
@@ -170,6 +224,7 @@ class completion_view {
                     'connectionid' => (int) $r->connectionid,
                     'resourcelinkid' => (int) $r->resourcelinkid,
                     'person' => \tool_ltidiagnostics\local\grades\grade_diagnosis::pseudonym($conn->key, (int) $r->userid),
+                    'userid' => (int) $r->userid,
                     'source' => (string) $r->sourcekind . ' ' . (int) $r->sourceid,
                     'desiredstate' => (int) $r->desiredstate,
                     'revoked' => (int) $r->desiredstate === 0 && (int) $r->version > 1,
@@ -212,6 +267,7 @@ class completion_view {
                     'connectionid' => (int) $r->connectionid,
                     'cmid' => (int) $r->cmid,
                     'person' => \tool_ltidiagnostics\local\grades\grade_diagnosis::pseudonym($conn->key, (int) $r->userid),
+                    'userid' => (int) $r->userid,
                     'remoteversion' => (int) $r->remoteversion,
                     'remotestate' => (int) $r->remotestate,
                     'appliedversion' => (int) $r->appliedversion,
