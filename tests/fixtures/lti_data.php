@@ -108,6 +108,38 @@ trait lti_data {
     }
 
     /**
+     * Publish a whole course as an LTI 1.3 tool (course-wide publication, no activity).
+     *
+     * @param \stdClass $course Course.
+     * @return \stdClass The enrol_lti_tools record, with the enrol instance in property "instance".
+     */
+    protected function create_course_publication(\stdClass $course): \stdClass {
+        global $DB;
+        /** @var \enrol_lti_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('enrol_lti');
+        $tool = $generator->create_published_resource([
+            'name' => 'Published course', 'courseid' => $course->id, 'activityid' => null, 'ltiversion' => 'LTI-1p3',
+        ]);
+        $tool = $DB->get_record('enrol_lti_tools', ['id' => $tool->id], '*', MUST_EXIST);
+        $tool->instance = $DB->get_record('enrol', ['id' => $tool->enrolid], '*', MUST_EXIST);
+        return $tool;
+    }
+
+    /**
+     * An external tool activity (platform side) that uses a tool type.
+     *
+     * @param \stdClass $course Course.
+     * @param int $typeid Tool type.
+     * @param string $name Activity name.
+     * @return int Course module id.
+     */
+    protected function create_lti_activity(\stdClass $course, int $typeid, string $name = 'External tool'): int {
+        $lti = $this->getDataGenerator()->create_module('lti', ['course' => $course->id, 'typeid' => $typeid,
+            'name' => $name, 'toolurl' => '']);
+        return (int) $lti->cmid;
+    }
+
+    /**
      * Link a published tool to a deployment through a resource link row.
      *
      * @param int $depid Deployment row id.

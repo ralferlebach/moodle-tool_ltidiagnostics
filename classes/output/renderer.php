@@ -48,10 +48,19 @@ class renderer extends \plugin_renderer_base {
      *
      * @param connection[] $connections Connections.
      * @param bool $reveal True when identifiers may be shown.
+     * @param int $courseid Course of the overview filter (0: none); the links keep it and "Used in" shows only its use.
+     * @param int $cmid Activity of the overview filter (0: none).
      * @return string
      */
-    public function connection_list(array $connections, bool $reveal): string {
+    public function connection_list(array $connections, bool $reveal, int $courseid = 0, int $cmid = 0): string {
         $rows = [];
+        // The shown use of every connection first, then all its names in bulk (issue #30 AK6).
+        $shown = [];
+        foreach ($connections as $c) {
+            $shown[$c->key] = self::usage_shown($c, $courseid, $cmid);
+        }
+        \tool_ltidiagnostics\local\names::for_usage(array_merge([], ...array_column($shown, 'items')));
+        $scopeparams = array_filter(['courseid' => $courseid, 'cmid' => $cmid]);
         foreach ($connections as $c) {
             $services = [];
             if ($c->role === connection::ROLE_PLATFORM) {
@@ -67,18 +76,14 @@ class renderer extends \plugin_renderer_base {
             } else {
                 $services[] = get_string('toolcount', 'tool_ltidiagnostics', count($c->tools));
             }
-            $actions = [['url' => (new \moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $c->key]))->out(false),
+            $actions = [['url' => (new \moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $c->key]
+                + $scopeparams))->out(false),
                 'label' => get_string('open', 'tool_ltidiagnostics'), 'aria' => get_string(
                     'open_for',
                     'tool_ltidiagnostics',
                     $c->name
                 )]];
-            foreach (\tool_ltidiagnostics\local\navigation::core_links($c) as $l) {
-                if ($l['kind'] === 'registration' || $l['kind'] === 'tooltype') {
-                    $actions[] = ['url' => $l['url']->out(false), 'label' => get_string('edit'),
-                        'aria' => get_string('edit_for', 'tool_ltidiagnostics', $c->name)];
-                }
-            }
+            $edit = \tool_ltidiagnostics\local\navigation::edit_connection($c);
             // Connection identities are LTI configuration of this site, not secrets: shown in full to everybody who may
             // open this page (issue #12). Tokens and keys are never part of the list.
             $rows[] = [
@@ -92,6 +97,8 @@ class renderer extends \plugin_renderer_base {
                 'url' => $actions[0]['url'],
                 'actionlabel' => get_string('open', 'tool_ltidiagnostics'),
                 'actions' => $actions,
+                'edithtml' => $edit ? \tool_ltidiagnostics\local\navigation::pencil($edit['url'], $edit['label']) : '',
+                'usagehtml' => $this->usage_cell($shown[$c->key]),
                 'key' => $c->key,
             ];
         }
@@ -103,6 +110,7 @@ class renderer extends \plugin_renderer_base {
                 'issuer' => get_string('issuer', 'tool_ltidiagnostics'), 'client' => get_string('clientid', 'tool_ltidiagnostics'),
                 'deployment' => get_string('deploymentid', 'tool_ltidiagnostics'),
                 'state' => get_string('state', 'tool_ltidiagnostics'), 'services' => get_string('services', 'tool_ltidiagnostics'),
+                'usage' => get_string('usedin', 'tool_ltidiagnostics'),
                 'action' => get_string('action', 'tool_ltidiagnostics'),
             ],
             'rows' => $rows,
@@ -110,41 +118,201 @@ class renderer extends \plugin_renderer_base {
     }
 
     /**
-     * Header of a connection page: way back, readable name with local ids, role line, core configuration links (#12).
+     * Filter of the connection overview (issues #29, #32): search, role, course and activity in one compact row. The
+     * courses are those the listed connections are proven to be used in; the activities are those of the chosen course.
+     *
+     * @param connection[] $candidates Connections before the course/activity filter.
+     * @param array $params Current filter (search, role, courseid, cmid).
+     * @param \tool_ltidiagnostics\local\scope $scope Validated course/activity.
+     * @return string
+     */
+    public function overview_filter(array $candidates, array $params, \tool_ltidiagnostics\local\scope $scope): string {
+        $t = fn(string $id, $a = null): string => get_string($id, 'tool_ltidiagnostics', $a);
+        $courseids = [];
+        $cms = [];
+        foreach ($candidates as $c) {
+            foreach ($c->usage as $u) {
+                $courseids[$u['courseid']] = $u['courseid'];
+                if ($u['cmid'] && $scope->courseid && $u['courseid'] === (int) $scope->courseid) {
+                    $cms[$u['cmid']] = $u['courseid'];
+                }
+            }
+        }
+        \tool_ltidiagnostics\local\names::preload(array_values($courseids), $cms);
+        $select = 'custom-select-sm form-select-sm';
+        $field = fn(string $id, string $label, string $control): string => \html_writer::div(
+            \html_writer::label($label, $id, false, ['class' => 'small mb-0']) . $control,
+            'ltidiag-field'
+        );
+        // Option labels are HTML-safe (formatted names, escaped strings); html_writer::select() does not escape them.
+        $courses = [];
+        foreach ($courseids as $id) {
+            $courses[$id] = \tool_ltidiagnostics\local\names::course((int) $id);
+        }
+        \core_collator::asort($courses);
+        $courses = [0 => s($t('scope_allcourses'))] + $courses;
+        if ($scope->courseid && !isset($courses[$scope->courseid])) {
+            $courses[$scope->courseid] = \tool_ltidiagnostics\local\names::course((int) $scope->courseid);
+        }
+        $cmoptions = [];
+        foreach ($cms as $id => $courseid) {
+            $cmoptions[$id] = \tool_ltidiagnostics\local\names::cm((int) $id, (int) $courseid);
+        }
+        \core_collator::asort($cmoptions);
+        $cmoptions = [0 => s($scope->courseid ? $t('scope_allcms') : $t('overview_cm_choosecourse'))] + $cmoptions;
+        if ($scope->cmid && !isset($cmoptions[$scope->cmid])) {
+            $cmoptions[$scope->cmid] = \tool_ltidiagnostics\local\names::cm((int) $scope->cmid, (int) $scope->courseid);
+        }
+        $f = $field('id_ov_search', get_string('search'), \html_writer::empty_tag('input', ['type' => 'search',
+            'name' => 'search', 'id' => 'id_ov_search', 'value' => $params['search'] ?? '',
+            'class' => 'form-control form-control-sm']));
+        $f .= $field('id_ov_role', $t('role'), \html_writer::select([
+            '' => s($t('allroles')), 'platform' => s($t('role_platform')), 'tool' => s($t('role_tool')),
+        ], 'role', $params['role'] ?? '', false, ['id' => 'id_ov_role', 'class' => $select]));
+        $f .= $field('id_ov_courseid', $t('scope_course_label'), \html_writer::select(
+            $courses,
+            'courseid',
+            (int) $scope->courseid,
+            false,
+            ['id' => 'id_ov_courseid', 'class' => $select]
+        ));
+        $f .= $field('id_ov_cmid', $t('scope_cm_label'), \html_writer::select(
+            $cmoptions,
+            'cmid',
+            (int) $scope->cmid,
+            false,
+            ['id' => 'id_ov_cmid', 'class' => $select]
+        ));
+        $buttons = \html_writer::tag('button', $t('filter'), ['type' => 'submit', 'class' => 'btn btn-primary btn-sm']);
+        if ($params) {
+            $buttons .= \html_writer::link(
+                new \moodle_url('/admin/tool/ltidiagnostics/index.php'),
+                $t('filter_reset'),
+                ['class' => 'btn btn-link btn-sm', 'id' => 'tool_ltidiagnostics_overview_reset']
+            );
+        }
+        $f .= \html_writer::div($buttons, 'ltidiag-field ltidiag-buttons');
+        $o = \html_writer::tag('form', \html_writer::div($f, 'ltidiag-toolbar'), ['method' => 'get',
+            'action' => (new \moodle_url('/admin/tool/ltidiagnostics/index.php'))->out_omit_querystring(),
+            'class' => 'mb-2', 'id' => 'tool_ltidiagnostics_overview_filter', 'role' => 'search',
+            'aria-label' => $t('overview_filter_label')]);
+        foreach ($scope->errors as $error) {
+            $o .= $this->notification($t($error), \core\output\notification::NOTIFY_WARNING);
+        }
+        return $o;
+    }
+
+    /** @var int Use entries shown per connection in the overview. */
+    private const USAGESHOWN = 5;
+
+    /**
+     * The use of a connection shown in the overview: inside the filter, without duplicates, at most USAGESHOWN entries.
+     *
+     * @param connection $c Connection.
+     * @param int $courseid Course filter (0: none).
+     * @param int $cmid Activity filter (0: none).
+     * @return array items (usage entries), more (count not shown)
+     */
+    private static function usage_shown(connection $c, int $courseid, int $cmid): array {
+        $items = [];
+        $more = 0;
+        foreach ($c->usage as $u) {
+            if (($courseid > 0 && $u['courseid'] !== $courseid) || ($cmid > 0 && $u['cmid'] !== $cmid)) {
+                continue;
+            }
+            $key = $u['kind'] . ':' . $u['courseid'] . ':' . $u['cmid'] . ':' . $u['toolid'];
+            if (isset($items[$key])) {
+                continue;
+            }
+            if (count($items) >= self::USAGESHOWN) {
+                $more++;
+                $items[$key] = null;
+                continue;
+            }
+            $items[$key] = $u;
+        }
+        return ['items' => array_values(array_filter($items)), 'more' => $more];
+    }
+
+    /**
+     * Where a connection is used (issues #29, #30): its publications (tool role), activities and course-bound tool type
+     * (platform role) by name and id, each with its own edit pencil when the user may edit it. With an overview filter
+     * only the use inside that course or activity is listed.
+     *
+     * @param array $shown Result of usage_shown().
+     * @return string HTML.
+     */
+    private function usage_cell(array $shown): string {
+        $items = [];
+        foreach ($shown['items'] as $u) {
+            if ($u['kind'] === 'publication') {
+                $name = \tool_ltidiagnostics\local\names::publication($u);
+                $html = $name;
+                $edit = \tool_ltidiagnostics\local\navigation::edit_publication((int) $u['courseid'], (int) $u['enrolid']);
+                if ($edit) {
+                    $html .= \tool_ltidiagnostics\local\navigation::pencil($edit, get_string(
+                        'nav_edit_publication_of',
+                        'tool_ltidiagnostics',
+                        \tool_ltidiagnostics\local\names::plain($name)
+                    ));
+                }
+            } else if ($u['kind'] === 'activity') {
+                $html = \tool_ltidiagnostics\local\identity::cm_html((int) $u['cmid'], (int) $u['courseid']);
+            } else {
+                $html = \tool_ltidiagnostics\local\identity::course_html((int) $u['courseid']);
+            }
+            if (!empty($u['cmid'])) {
+                // An activity is named together with its course.
+                $html .= \html_writer::div(get_string(
+                    'gpre_incourse',
+                    'tool_ltidiagnostics',
+                    \tool_ltidiagnostics\local\names::course((int) $u['courseid'])
+                ), 'text-muted');
+            }
+            $items[] = \html_writer::tag('li', $html, ['class' => 'mb-1']);
+        }
+        if (!$items) {
+            return \html_writer::span(get_string('usedin_none', 'tool_ltidiagnostics'), 'text-muted');
+        }
+        $o = \html_writer::tag('ul', implode('', $items), ['class' => 'list-unstyled mb-0 small']);
+        if ($shown['more'] > 0) {
+            $o .= \html_writer::span(get_string('usedin_more', 'tool_ltidiagnostics', $shown['more']), 'small text-muted');
+        }
+        return $o;
+    }
+
+    /**
+     * Header of a connection page (issues #12, #30): the way back, the readable name with its local ids and the one
+     * contextual action (the edit pencil of the connection), then one short line of facts.
      *
      * @param \tool_ltidiagnostics\local\connection $c Connection.
      * @return string
      */
     public function connection_header(connection $c): string {
         $o = \tool_ltidiagnostics\local\navigation::back_link();
-        $o .= $this->heading(s(\tool_ltidiagnostics\local\navigation::label($c)), 2, '', 'tool_ltidiagnostics_connheading');
-        $o .= \html_writer::tag('p', get_string('connectionsummary', 'tool_ltidiagnostics', (object) [
+        $title = s(\tool_ltidiagnostics\local\navigation::label($c));
+        $edit = \tool_ltidiagnostics\local\navigation::edit_connection($c);
+        if ($edit) {
+            $title .= \tool_ltidiagnostics\local\navigation::pencil($edit['url'], $edit['label']);
+        }
+        $o .= $this->heading($title, 2, '', 'tool_ltidiagnostics_connheading');
+        $facts = [get_string('connectionsummary', 'tool_ltidiagnostics', (object) [
             'role' => get_string('role_' . $c->role, 'tool_ltidiagnostics'),
             'lti' => s($c->ltiversion),
             'state' => s($c->state),
             'id' => \tool_ltidiagnostics\local\support::diagnostic_id($c->key),
-        ]));
-        $ids = [];
+        ])];
         if ($c->issuer !== '') {
-            $ids[] = get_string('id_issuer', 'tool_ltidiagnostics', s($c->issuer));
+            $facts[] = get_string('id_issuer', 'tool_ltidiagnostics', s($c->issuer));
         }
         if ($c->clientid !== '') {
-            $ids[] = get_string('id_client', 'tool_ltidiagnostics', s($c->clientid));
+            $facts[] = get_string('id_client', 'tool_ltidiagnostics', s($c->clientid));
         }
         if ($c->deploymentid !== '') {
-            $ids[] = get_string('id_deployment', 'tool_ltidiagnostics', s($c->deploymentid));
+            $facts[] = get_string('id_deployment', 'tool_ltidiagnostics', s($c->deploymentid));
         }
-        if ($ids) {
-            $o .= \html_writer::tag('p', implode(' · ', $ids), ['class' => 'small', 'id' => 'tool_ltidiagnostics_connids']);
-        }
-        $links = [];
-        foreach (\tool_ltidiagnostics\local\navigation::core_links($c) as $l) {
-            $links[] = \html_writer::link($l['url'], $l['label'], ['class' => 'btn btn-outline-secondary btn-sm mr-1 me-1 mb-1',
-                'data-corelink' => $l['kind']]);
-        }
-        if ($links) {
-            $o .= \html_writer::div(implode('', $links), 'mb-2', ['id' => 'tool_ltidiagnostics_corelinks']);
-        }
+        $o .= \html_writer::tag('p', implode(' · ', $facts), ['class' => 'small text-muted',
+            'id' => 'tool_ltidiagnostics_connids']);
         return $o;
     }
 
@@ -162,33 +330,38 @@ class renderer extends \plugin_renderer_base {
         $base = new \moodle_url('/admin/tool/ltidiagnostics/connection.php');
         $f = \html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'key', 'value' => $c->key])
             . \html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab', 'value' => $tab]);
-        $courses = [0 => $t('scope_allcourses')] + $related['courses'];
+        // Option labels are HTML-safe already (names are formatted, invalid ids are shown as missing): html_writer::select()
+        // does not escape them again.
+        $courses = [0 => s($t('scope_allcourses'))] + $related['courses'];
         if ($scope->courseid && !isset($courses[$scope->courseid])) {
-            $courses[$scope->courseid] = $scope->coursename;
+            $courses[$scope->courseid] = \tool_ltidiagnostics\local\names::course($scope->courseid);
         }
-        $f .= \html_writer::div(\html_writer::label($t('scope_course_label'), 'id_scope_courseid', false, ['class' => 'mr-1 me-1'])
+        $select = 'custom-select-sm form-select-sm';
+        $f .= \html_writer::div(\html_writer::label($t('scope_course_label'), 'id_scope_courseid', false, ['class' => 'small mb-0'])
             . \html_writer::select($courses, 'courseid', $scope->courseid, false, ['id' => 'id_scope_courseid',
-                'class' => 'custom-select form-select']), 'mr-2 me-2 mb-2 d-inline-block');
-        $cms = [0 => $t('scope_allcms')];
+                'class' => $select]), 'ltidiag-field');
+        $cms = [0 => s($t('scope_allcms'))];
         foreach ($related['cms'] as $cmid => $info) {
             if (!$scope->courseid || $info['courseid'] === $scope->courseid) {
-                $cms[$cmid] = $info['name'] . ' ' . $t('id_cmidsuffix', $cmid);
+                $cms[$cmid] = $info['name'];
             }
         }
         if ($scope->cmid && !isset($cms[$scope->cmid])) {
-            $cms[$scope->cmid] = $scope->cmname;
+            $cms[$scope->cmid] = \tool_ltidiagnostics\local\names::cm($scope->cmid, (int) $scope->courseid);
         }
-        $f .= \html_writer::div(\html_writer::label($t('scope_cm_label'), 'id_scope_cmid', false, ['class' => 'mr-1 me-1'])
+        $f .= \html_writer::div(\html_writer::label($t('scope_cm_label'), 'id_scope_cmid', false, ['class' => 'small mb-0'])
             . \html_writer::select($cms, 'cmid', $scope->cmid, false, ['id' => 'id_scope_cmid',
-                'class' => 'custom-select form-select']), 'mr-2 me-2 mb-2 d-inline-block');
+                'class' => $select]), 'ltidiag-field');
         $p = $scope->params();
         foreach (['from', 'to'] as $name) {
-            $f .= \html_writer::div(\html_writer::label($t('scope_' . $name), 'id_scope_' . $name, false, ['class' => 'mr-1 me-1'])
+            $f .= \html_writer::div(\html_writer::label($t('scope_' . $name), 'id_scope_' . $name, false, ['class' => 'small mb-0'])
                 . \html_writer::empty_tag('input', ['type' => 'date', 'name' => $name, 'id' => 'id_scope_' . $name,
-                    'value' => $p[$name] ?? '', 'class' => 'form-control d-inline-block w-auto']), 'mr-2 me-2 mb-2 d-inline-block');
+                    'value' => $p[$name] ?? '', 'class' => 'form-control form-control-sm']), 'ltidiag-field');
         }
-        $f .= \html_writer::tag('button', $t('scope_apply'), ['type' => 'submit', 'class' => 'btn btn-primary mb-2']);
-        $o = \html_writer::tag('form', $f, ['method' => 'get', 'action' => $base->out_omit_querystring(), 'class' => 'mb-1',
+        $f .= \html_writer::div(\html_writer::tag('button', $t('scope_apply'), ['type' => 'submit',
+            'class' => 'btn btn-primary btn-sm']), 'ltidiag-field ltidiag-buttons');
+        $o = \html_writer::tag('form', \html_writer::div($f, 'ltidiag-toolbar'), ['method' => 'get',
+            'action' => $base->out_omit_querystring(), 'class' => 'mb-1',
             'id' => 'tool_ltidiagnostics_scope', 'role' => 'search', 'aria-label' => $t('scope_label')]);
         $chips = [];
         foreach ($scope->describe() as $kind => $text) {
@@ -1149,9 +1322,16 @@ class renderer extends \plugin_renderer_base {
             $o .= $this->tasks_overview($page['scheduled'] ?? [], $page['cron'] ?? null);
         }
         if ($ctx['view'] === 'imports') {
-            $o .= !empty($page['imports']) ? $this->imports_table($page['imports'])
-                : \html_writer::tag('p', $t('noimports'));
-            return $o . $g->offset_pager($ctx['baseurl'], $params, 'eoffset', $page['offset'], $page['limit'], $page['total']);
+            $pager = $g->pager(
+                $ctx['baseurl'],
+                $params,
+                'epage',
+                (int) $ctx['page'],
+                (int) $page['limit'],
+                (int) $page['total']
+            );
+            return $o . $pager . (!empty($page['imports']) ? $this->imports_table($page['imports'])
+                : \html_writer::tag('p', $t('noimports'))) . $pager;
         }
         $o .= \html_writer::tag(
             'p',
@@ -1168,6 +1348,13 @@ class renderer extends \plugin_renderer_base {
         if (\tool_ltidiagnostics\local\identity::can_see_names()) {
             \tool_ltidiagnostics\local\identity::preload(array_map(fn($r) => (int) $r['userid'], $page['rows']));
         }
+        $cmids = [];
+        foreach ($page['rows'] as $r) {
+            if ($r['cmid'] && $r['courseid']) {
+                $cmids[(int) $r['cmid']] = (int) $r['courseid'];
+            }
+        }
+        \tool_ltidiagnostics\local\names::preload(array_column($page['rows'], 'courseid'), $cmids);
         foreach ($page['rows'] as $r) {
             $h = new \html_table_cell(userdate($r['time'], '%Y-%m-%d %H:%M:%S', 'UTC'));
             $h->header = true;
@@ -1177,7 +1364,7 @@ class renderer extends \plugin_renderer_base {
                 $relation[] = \tool_ltidiagnostics\local\identity::course_html($r['courseid']);
             }
             if ($r['cmid']) {
-                $relation[] = \tool_ltidiagnostics\local\identity::cm_html($r['cmid']);
+                $relation[] = \tool_ltidiagnostics\local\identity::cm_html($r['cmid'], (int) $r['courseid']);
             }
             if ($r['userid']) {
                 $relation[] = \tool_ltidiagnostics\local\identity::person_html($ctx['key'], $r['userid']);
@@ -1202,8 +1389,8 @@ class renderer extends \plugin_renderer_base {
         $table->head = [$t('ev_time', $tz), $t('source'), $t('ev_service'), $t('direction'), $t('event'), $t('ev_level'),
             $t('ev_relation'), $t('ev_assignment')];
         $table->data = $rows;
-        $o .= \html_writer::div(\html_writer::table($table), 'table-responsive');
-        $o .= $g->offset_pager($ctx['baseurl'], $params, 'eoffset', $page['offset'], $page['limit'], $page['total']);
+        $pager = $g->pager($ctx['baseurl'], $params, 'epage', (int) $ctx['page'], (int) $page['limit'], (int) $page['total']);
+        $o .= $pager . \html_writer::div(\html_writer::table($table), 'table-responsive') . $pager;
         return $o . \html_writer::tag('p', $t('limit_absencenotevidence'), ['class' => 'small text-muted']);
     }
 
@@ -1266,8 +1453,8 @@ class renderer extends \plugin_renderer_base {
             $t('ev_count', (object) ['shown' => count($page['items']), 'total' => $ctx['total']]),
             ['id' => 'tool_ltidiagnostics_tl_count', 'data-total' => (int) $ctx['total']]
         );
-        $o .= $this->timeline($page);
-        return $o . $g->offset_pager($ctx['baseurl'], $params, 'toffset', $ctx['offset'], $ctx['limit'], $ctx['total']);
+        $pager = $g->pager($ctx['baseurl'], $params, 'tpage', (int) $ctx['page'], (int) $ctx['limit'], (int) $ctx['total']);
+        return $o . $pager . $this->timeline($page) . $pager;
     }
 
     /**
@@ -1315,16 +1502,23 @@ class renderer extends \plugin_renderer_base {
      * baseline; content hashes only in the technical details. Snapshots are per connection and not restricted by course.
      *
      * @param string $key Connection key.
-     * @param int $offset Offset of the snapshot page.
+     * @param int $page Page of the snapshot list (0-based).
+     * @param array $scopeparams Scope of the page (course, activity, period), kept by the pager links.
      * @return string
      */
-    public function history_tab(string $key, int $offset = 0): string {
+    public function history_tab(string $key, int $page = 0, array $scopeparams = []): string {
         global $DB;
         $t = fn(string $id, $a = null): string => get_string($id, 'tool_ltidiagnostics', $a);
         $perpage = 10;
-        $offset = max(0, $offset);
         $total = (int) $DB->count_records('tool_ltidiagnostics_snap', ['connkey' => $key, 'kind' => 'matrix']);
+        $page = \tool_ltidiagnostics\output\sections::clamp_page(max(0, $page), $perpage, $total);
+        $offset = $page * $perpage;
         $o = \html_writer::tag('p', $t('hist_intro'), ['class' => 'text-muted']);
+        /** @var grades_renderer $g */
+        $g = $this->page->get_renderer('tool_ltidiagnostics', 'grades');
+        // The pager keeps the scope, so the tabs after it keep it too.
+        $pager = $g->pager(new \moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $key,
+            'tab' => 'history'] + $scopeparams), [], 'hpage', $page, $perpage, $total);
         if ($total === 0) {
             $attrs = ['class' => 'alert alert-info', 'id' => 'tool_ltidiagnostics_hist_none'];
             return $o . \html_writer::tag('p', $t('hist_none'), $attrs);
@@ -1400,7 +1594,7 @@ class renderer extends \plugin_renderer_base {
         $table->head = [$t('time'), $t('feature'), $t('hist_beforeafter'), $t('hist_steps'), $t('hist_relevance'),
             $t('hist_evidence')];
         $table->data = $rows;
-        $o .= \html_writer::div(\html_writer::table($table), 'table-responsive');
+        $o .= $pager . \html_writer::div(\html_writer::table($table), 'table-responsive') . $pager;
         if ($total === 1) {
             $attrs = ['class' => 'alert alert-info', 'id' => 'tool_ltidiagnostics_hist_baseline'];
             $o .= \html_writer::tag('p', $t('hist_onlybaseline'), $attrs);
@@ -1411,9 +1605,6 @@ class renderer extends \plugin_renderer_base {
         }
         $o .= \html_writer::tag('details', \html_writer::tag('summary', $t('hist_technical')) .
             \html_writer::alist($hashes, ['class' => 'small text-muted']), ['id' => 'tool_ltidiagnostics_hist_hashes']);
-        /** @var grades_renderer $g */
-        $g = $this->page->get_renderer('tool_ltidiagnostics', 'grades');
-        return $o . $g->offset_pager(new \moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $key,
-            'tab' => 'history']), [], 'hoffset', $offset, $perpage, $total);
+        return $o;
     }
 }

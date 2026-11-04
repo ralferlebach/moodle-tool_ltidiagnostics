@@ -116,7 +116,9 @@ class grades_renderer extends \plugin_renderer_base {
                 'id' => 'tool_ltidiagnostics_grades_na']);
         }
         $o .= html_writer::tag('p', self::t('grades_ladder'), ['class' => 'small text-muted']);
-        $o .= $this->prerequisites($d['prerequisites'], $d['resources']);
+        $resources = !empty($d['scoped']) ? array_intersect_key($d['resources'], array_flip($d['scopetools']))
+            : $d['resources'];
+        $o .= $this->prerequisites($d['prerequisites'], $resources, !empty($d['scoped']));
         $o .= $this->output->heading(self::t('grades_findings'), 3);
         $o .= html_writer::tag('p', self::t('grades_findings_scope', (object) ['used' => count($d['rows']),
             'total' => (int) $d['total']]), ['class' => 'small text-muted', 'id' => 'tool_ltidiagnostics_findings_basis']);
@@ -131,28 +133,33 @@ class grades_renderer extends \plugin_renderer_base {
     }
 
     /**
-     * Section "resource links and learners": filter form, counters per dimension, rows, selection, pager.
+     * Section "resource links and learners" (issues #21, #31, #32): one compact toolbar, the counters folded away, the
+     * core pager above and below the table, row selection for users who can act on a selection.
      *
      * @param array $d Diagnosis.
-     * @param array $ctx Grade context plus baseurl, params, filters, perpage, offset, scope.
+     * @param array $ctx Grade context plus baseurl, params, filters, perpage, offset, page, scope.
      * @return string
      */
     public function rows_section(array $d, array $ctx): string {
         $f = $ctx['filters'];
+        $c = $d['counters'];
         $o = $this->filter_form($ctx['baseurl'], 'grades_rows', [
             ['fgradesync', self::t('gf_gradesync'), ['' => self::t('gf_any'), '1' => self::t('gpre_gradesync_on'),
                 '0' => self::t('gpre_gradesync_off')], $f['gradesync']],
             ['fgrade', self::t('gf_grade'), ['' => self::t('gf_any')] + self::options(
                 'gcnt_grade_',
-                \tool_ltidiagnostics\local\grades\pair_query::GRADE
+                \tool_ltidiagnostics\local\grades\pair_query::GRADE,
+                $c['grade']
             ), $f['grade']],
             ['ftransfer', self::t('gf_transfer'), ['' => self::t('gf_any')] + self::options(
                 'gcnt_transfer_',
-                \tool_ltidiagnostics\local\grades\pair_query::TRANSFER
+                \tool_ltidiagnostics\local\grades\pair_query::TRANSFER,
+                $c['transfer']
             ), $f['transfer']],
             ['fbooking', self::t('gf_booking'), ['' => self::t('gf_any')] + self::options(
                 'gcnt_booking_',
-                \tool_ltidiagnostics\local\grades\pair_query::BOOKING
+                \tool_ltidiagnostics\local\grades\pair_query::BOOKING,
+                $c['booking']
             ), $f['booking']],
         ], array_filter(['fuser' => $f['userid'], 'flink' => $f['linkid']]), [
             'search' => !empty($ctx['names']) ? ['fsearch', self::t('gf_search'), $f['usersearch']] : null,
@@ -165,55 +172,103 @@ class grades_renderer extends \plugin_renderer_base {
                 ['class' => 'ltidiag-nav']
             ), ['class' => 'small']);
         }
-        $o .= $this->counters($d['counters'], (int) $d['total'], $ctx);
+        $o .= $this->counters($c, (int) $d['total'], $ctx);
         $o .= html_writer::tag(
             'p',
             self::t('grades_rows_desc', (object) ['total' => $d['total'],
             'from' => $d['total'] ? $ctx['offset'] + 1 : 0, 'to' => $ctx['offset'] + count($d['rows'])]),
-            ['id' => 'tool_ltidiagnostics_rows_count', 'data-total' => (int) $d['total']]
+            ['id' => 'tool_ltidiagnostics_rows_count', 'data-total' => (int) $d['total'], 'class' => 'mb-1']
         );
-        $table = $this->rows($d, $ctx + ['selectable' => true]);
-        if (!empty($ctx['canrepair']) && $d['rows']) {
-            $max = \tool_ltidiagnostics\local\config::bounded('repairbatchmax');
-            $hidden = ['key' => $ctx['key'], 'action' => 'select', 'sesskey' => sesskey(),
-                'displayed' => implode(',', array_map(fn($r) => $r['linkid'] . ':' . $r['userid'], $d['rows']))]
-                + $ctx['scope']->params() + array_filter(['fgrade' => $f['grade'], 'ftransfer' => $f['transfer'],
-                'fbooking' => $f['booking'], 'fgradesync' => $f['gradesync'], 'fuser' => $f['userid'], 'flink' => $f['linkid'],
-                'fsearch' => !empty($ctx['names']) ? $f['usersearch'] : '',
-                'perpage' => $ctx['perpage'] ?? 0, 'offset' => $ctx['offset'] ?? 0]);
-            $inputs = '';
-            foreach ($hidden as $name => $value) {
-                $inputs .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $name, 'value' => $value]);
-            }
-            $buttons = html_writer::tag('button', self::t('gsel_rows'), ['type' => 'submit', 'name' => 'selectmode',
-                'value' => 'rows', 'class' => 'btn btn-secondary mr-2 me-2 mb-1'])
-                . html_writer::tag('button', self::t('gsel_page', count($d['rows'])), ['type' => 'submit',
-                'name' => 'selectmode', 'value' => 'page', 'class' => 'btn btn-secondary mr-2 me-2 mb-1']);
-            if ($d['total'] <= $max) {
-                $buttons .= html_writer::tag('button', self::t('gsel_matches', $d['total']), ['type' => 'submit',
-                    'name' => 'selectmode', 'value' => 'matches', 'class' => 'btn btn-secondary mb-1']);
-            } else {
-                $buttons .= html_writer::span(
-                    self::t('gsel_matches_toolarge', (object) ['count' => $d['total'], 'max' => $max]),
-                    'small text-muted'
-                );
-            }
-            $o .= $table . html_writer::tag('form', $inputs . html_writer::div(html_writer::tag(
-                'p',
-                self::t('gsel_desc'),
-                ['class' => 'small text-muted mb-1']
-            ) . $buttons, 'mb-2'), ['method' => 'post',
-                'action' => (new moodle_url('/admin/tool/ltidiagnostics/repair.php'))->out(false),
-                'id' => 'tool_ltidiagnostics_selection']);
-        } else {
-            $o .= $table;
+        $pager = $this->pager(
+            $ctx['baseurl'],
+            $ctx['params'],
+            'gpage',
+            (int) $ctx['page'],
+            (int) $ctx['perpage'],
+            (int) $d['total']
+        );
+        $select = self::can_select($ctx) && $d['rows'];
+        $o .= $pager;
+        // The paging bar directly above and below the table, the selection actions after it.
+        $o .= $this->rows($d, $ctx + ['selectable' => $select]);
+        $o .= $pager;
+        if ($select) {
+            $o .= $this->selection_form($d, $ctx);
         }
-        $o .= $this->offset_pager($ctx['baseurl'], $ctx['params'], 'offset', $ctx['offset'], $ctx['perpage'], (int) $d['total']);
         return $o;
     }
 
     /**
-     * Counters of the population per dimension (disjoint inside a dimension; dimensions are not summed).
+     * True when the user can act on a selection of rows: the read-only AGS result check or the grade replay.
+     *
+     * @param array $ctx Grade context.
+     * @return bool
+     */
+    public static function can_select(array $ctx): bool {
+        return !empty($ctx['canrepair']) || !empty($ctx['canresult']);
+    }
+
+    /**
+     * The form the row checkboxes belong to (through their form attribute): what to select and what to do with it.
+     * Selecting never sends anything; every action has its own preview.
+     *
+     * @param array $d Diagnosis.
+     * @param array $ctx Grade context.
+     * @return string
+     */
+    private function selection_form(array $d, array $ctx): string {
+        $f = $ctx['filters'];
+        $max = \tool_ltidiagnostics\local\config::bounded('repairbatchmax');
+        $hidden = ['key' => $ctx['key'], 'action' => 'select', 'sesskey' => sesskey(),
+            'displayed' => implode(',', array_map(fn($r) => $r['linkid'] . ':' . $r['userid'], $d['rows']))]
+            + $ctx['scope']->params() + array_filter(['fgrade' => $f['grade'], 'ftransfer' => $f['transfer'],
+            'fbooking' => $f['booking'], 'fgradesync' => $f['gradesync'], 'fuser' => $f['userid'], 'flink' => $f['linkid'],
+            'fsearch' => !empty($ctx['names']) ? $f['usersearch'] : '',
+            'perpage' => $ctx['perpage'] ?? 0, 'gpage' => $ctx['page'] ?? 0]);
+        $inputs = '';
+        foreach ($hidden as $name => $value) {
+            $inputs .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $name, 'value' => $value]);
+        }
+        $actions = [];
+        if (!empty($ctx['canresult'])) {
+            $actions['resultcheck'] = self::t('gsel_do_resultcheck');
+        }
+        if (!empty($ctx['canrepair'])) {
+            $actions['replay'] = self::t('gsel_do_replay');
+        }
+        $id = 'ltidiag-selaction';
+        $what = html_writer::div(
+            html_writer::label(self::t('gsel_action'), $id, false, ['class' => 'small mb-0']) .
+            html_writer::select($actions, 'bulkaction', array_key_first($actions), false, ['id' => $id,
+                'class' => 'custom-select-sm form-select-sm']),
+            'ltidiag-field'
+        );
+        $buttons = html_writer::tag('button', self::t('gsel_rows'), ['type' => 'submit', 'name' => 'selectmode',
+            'value' => 'rows', 'class' => 'btn btn-secondary btn-sm'])
+            . html_writer::tag('button', self::t('gsel_page', count($d['rows'])), ['type' => 'submit',
+            'name' => 'selectmode', 'value' => 'page', 'class' => 'btn btn-secondary btn-sm']);
+        if ($d['total'] <= $max) {
+            $buttons .= html_writer::tag('button', self::t('gsel_matches', $d['total']), ['type' => 'submit',
+                'name' => 'selectmode', 'value' => 'matches', 'class' => 'btn btn-secondary btn-sm']);
+        } else {
+            $buttons .= html_writer::span(
+                self::t('gsel_matches_toolarge', (object) ['count' => $d['total'], 'max' => $max]),
+                'small text-muted'
+            );
+        }
+        $bar = html_writer::div($what . $buttons, 'ltidiag-toolbar mb-1');
+        return html_writer::tag('form', $inputs . $bar . html_writer::tag(
+            'p',
+            self::t('gsel_desc'),
+            ['class' => 'small text-muted mb-2']
+        ), ['method' => 'post',
+            'action' => (new moodle_url('/admin/tool/ltidiagnostics/repair.php'))->out(false),
+            'id' => 'tool_ltidiagnostics_selection', 'aria-label' => self::t('gsel_label')]);
+    }
+
+    /**
+     * Counters of the population per dimension (disjoint inside a dimension; dimensions are not summed), folded away
+     * under one summary line (issue #32); the same numbers stand in the options of the filters.
      *
      * @param array $c Counters.
      * @param int $total Total of the population.
@@ -221,7 +276,6 @@ class grades_renderer extends \plugin_renderer_base {
      * @return string
      */
     private function counters(array $c, int $total, array $ctx): string {
-        $o = '';
         $filtername = ['grade' => 'fgrade', 'transfer' => 'ftransfer', 'booking' => 'fbooking'];
         $cells = [];
         foreach (['grade', 'transfer', 'booking'] as $dim) {
@@ -229,7 +283,7 @@ class grades_renderer extends \plugin_renderer_base {
             foreach ($c[$dim] as $value => $n) {
                 $h = new html_table_cell(html_writer::link(
                     new moodle_url($ctx['baseurl'], [$filtername[$dim] => $value] +
-                    array_diff_key($ctx['params'], ['offset' => 1])),
+                    array_diff_key($ctx['params'], ['gpage' => 1])),
                     self::t('gcnt_' . $dim . '_' . $value),
                     ['class' => 'ltidiag-nav']
                 ));
@@ -252,20 +306,21 @@ class grades_renderer extends \plugin_renderer_base {
                 ['class' => 'small text-muted']
             ), 'col-md-4');
         }
-        $o .= html_writer::div(implode('', $cells), 'row', ['id' => 'tool_ltidiagnostics_counters', 'data-total' => $total]);
-        $o .= html_writer::tag(
-            'p',
-            self::t('gcnt_note', userdate(time(), get_string('strftimedatetimeshort'))),
-            ['class' => 'small text-muted']
-        );
-        return $o;
+        $body = html_writer::div(implode('', $cells), 'row', ['id' => 'tool_ltidiagnostics_counters', 'data-total' => $total])
+            . html_writer::tag(
+                'p',
+                self::t('gcnt_note', userdate(time(), get_string('strftimedatetimeshort'))),
+                ['class' => 'small text-muted']
+            );
+        return html_writer::tag('details', html_writer::tag('summary', self::t('gcnt_summary', $total), ['class' => 'small']) .
+            $body, ['class' => 'mb-2', 'id' => 'tool_ltidiagnostics_counters_details']);
     }
 
     /**
-     * Section "journal": filters, rows, keyset pager.
+     * Section "journal" (issues #23, #31, #32): compact toolbar, numbered core pager above and below.
      *
-     * @param array $page Result of journal::page().
-     * @param array $ctx Grade context plus baseurl, params, perpage, before, scope.
+     * @param array $page Result of journal::numbered_page().
+     * @param array $ctx Grade context plus baseurl, params, perpage, page, scope.
      * @return string
      */
     public function journal_section(array $page, array $ctx): string {
@@ -280,6 +335,8 @@ class grades_renderer extends \plugin_renderer_base {
             ['jattr', self::t('gj_attr'), ['' => self::t('gf_any'), 'attributed' => self::t('gj_attr_attributed'),
                 'unattributed' => self::t('gj_attr_unattributed')], $p['jattr'] ?? ''],
         ], array_filter(['jlink' => $p['jlink'] ?? 0, 'juser' => $p['juser'] ?? 0]), [
+            'search' => ['jsearch', !empty($ctx['names']) ? self::t('gj_search') : self::t('gj_search_link'),
+                $p['jsearch'] ?? ''],
             'perpage' => ['jperpage', $ctx['perpage']],
         ]);
         if (!empty($p['jlink']) || !empty($p['juser'])) {
@@ -300,50 +357,44 @@ class grades_renderer extends \plugin_renderer_base {
         if (!$ctx['scope']->is_empty()) {
             $o .= html_writer::tag('p', self::t('gj_scope'), ['class' => 'small text-muted']);
         }
+        $from = $page['total'] ? $page['page'] * $ctx['perpage'] + 1 : 0;
         $o .= html_writer::tag(
             'p',
-            self::t('gj_count', (object) ['shown' => count($page['rows']), 'total' => $page['total']]),
-            ['id' => 'tool_ltidiagnostics_journal_count', 'data-total' => (int) $page['total']]
+            self::t('gj_range', (object) ['from' => $from, 'to' => $from ? $from + count($page['rows']) - 1 : 0,
+                'total' => $page['total']]),
+            ['id' => 'tool_ltidiagnostics_journal_count', 'data-total' => (int) $page['total'], 'class' => 'mb-1']
         );
-        $o .= $this->journal($page['rows'], $ctx);
-        $links = [];
-        if (!empty($ctx['before'])) {
-            $links[] = html_writer::link(
-                new moodle_url($ctx['baseurl'], $p),
-                self::t('gj_newest'),
-                ['class' => 'btn btn-secondary btn-sm mr-2 me-2 ltidiag-nav']
-            );
+        if (!empty($page['newer'])) {
+            $o .= html_writer::tag('p', html_writer::link(
+                new moodle_url($ctx['baseurl'], array_diff_key($p, ['jmax' => 1])),
+                self::t('gj_newer'),
+                ['class' => 'ltidiag-nav']
+            ), ['class' => 'small', 'id' => 'tool_ltidiagnostics_journal_newer']);
         }
-        if ($page['next']) {
-            $links[] = html_writer::link(
-                new moodle_url($ctx['baseurl'], $p + ['jbefore' => $page['next']]),
-                self::t('grades_older'),
-                ['class' => 'btn btn-secondary btn-sm ltidiag-nav']
-            );
-        }
-        if ($links) {
-            $o .= html_writer::div(implode('', $links), 'mb-3');
-        }
-        return $o;
+        $pager = $this->pager($ctx['baseurl'], $p, 'jpage', (int) $page['page'], (int) $ctx['perpage'], (int) $page['total']);
+        return $o . $pager . $this->journal($page['rows'], $ctx) . $pager;
     }
 
     /**
-     * Options of a select from string ids.
+     * Options of a select from string ids, with the count of each value when known.
      *
      * @param string $prefix String prefix.
      * @param string[] $values Values.
+     * @param array|null $counts Value => count.
      * @return array value => label
      */
-    private static function options(string $prefix, array $values): array {
+    private static function options(string $prefix, array $values, ?array $counts = null): array {
         $out = [];
         foreach ($values as $v) {
-            $out[$v] = self::t($prefix . $v);
+            $out[$v] = $counts !== null ? self::t('gopt_count', (object) ['label' => self::t($prefix . $v),
+                'count' => (int) ($counts[$v] ?? 0)]) : self::t($prefix . $v);
         }
         return $out;
     }
 
     /**
-     * GET filter form of a section (works without JavaScript; the AMD module submits it asynchronously).
+     * Compact GET filter toolbar of a section (issue #32): one row of small labelled controls on wide screens, wrapping
+     * on narrow ones. Works without JavaScript; the AMD module submits it asynchronously.
      *
      * @param moodle_url $base Page URL with scope.
      * @param string $section Section.
@@ -357,20 +408,22 @@ class grades_renderer extends \plugin_renderer_base {
         foreach ($base->params() + $hidden as $name => $value) {
             $fields .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $name, 'value' => $value]);
         }
+        $select = 'custom-select-sm form-select-sm';
+        $controls = '';
         foreach ($selects as [$name, $label, $options, $value]) {
             $id = 'ltidiag-' . $section . '-' . $name;
-            $fields .= html_writer::div(
-                html_writer::label($label, $id, false, ['class' => 'mr-1 me-1']) .
-                html_writer::select($options, $name, $value, false, ['id' => $id, 'class' => 'custom-select form-select']),
-                'mr-2 me-2 mb-2 d-inline-block'
+            $controls .= html_writer::div(
+                html_writer::label($label, $id, false, ['class' => 'small mb-0']) .
+                html_writer::select($options, $name, $value, false, ['id' => $id, 'class' => $select]),
+                'ltidiag-field'
             );
         }
         if (!empty($extra['search'])) {
             [$name, $label, $value] = $extra['search'];
             $id = 'ltidiag-' . $section . '-' . $name;
-            $fields .= html_writer::div(html_writer::label($label, $id, false, ['class' => 'mr-1 me-1']) .
+            $controls .= html_writer::div(html_writer::label($label, $id, false, ['class' => 'small mb-0']) .
                 html_writer::empty_tag('input', ['type' => 'search', 'name' => $name, 'id' => $id, 'value' => $value,
-                    'class' => 'form-control d-inline-block w-auto']), 'mr-2 me-2 mb-2 d-inline-block');
+                    'class' => 'form-control form-control-sm']), 'ltidiag-field');
         }
         if (!empty($extra['perpage'])) {
             [$name, $value] = $extra['perpage'];
@@ -379,64 +432,58 @@ class grades_renderer extends \plugin_renderer_base {
             foreach (sections::SIZES as $size) {
                 $options[$size] = (string) $size;
             }
-            $fields .= html_writer::div(
-                html_writer::label(self::t('perpage'), $id, false, ['class' => 'mr-1 me-1']) .
-                html_writer::select($options, $name, $value, false, ['id' => $id, 'class' => 'custom-select form-select']),
-                'mr-2 me-2 mb-2 d-inline-block'
+            $controls .= html_writer::div(
+                html_writer::label(self::t('perpage'), $id, false, ['class' => 'small mb-0']) .
+                html_writer::select($options, $name, $value, false, ['id' => $id, 'class' => $select]),
+                'ltidiag-field'
             );
         }
-        $fields .= html_writer::tag('button', self::t('filter'), ['type' => 'submit', 'class' => 'btn btn-secondary mb-2']);
-        $fields .= ' ' . html_writer::link($base, self::t('filter_reset'), ['class' => 'ltidiag-nav mb-2 d-inline-block']);
-        return html_writer::tag('form', $fields, ['method' => 'get', 'action' => $base->out_omit_querystring(),
-            'class' => 'ltidiag-filter mb-2', 'role' => 'search', 'aria-label' => self::t('filter_label_' . $section)]);
+        $controls .= html_writer::div(
+            html_writer::tag('button', self::t('filter'), ['type' => 'submit', 'class' => 'btn btn-secondary btn-sm']) .
+            html_writer::link($base, self::t('filter_reset'), ['class' => 'ltidiag-nav btn btn-link btn-sm']),
+            'ltidiag-field ltidiag-buttons'
+        );
+        return html_writer::tag('form', $fields . html_writer::div($controls, 'ltidiag-toolbar'), ['method' => 'get',
+            'action' => $base->out_omit_querystring(), 'class' => 'ltidiag-filter mb-2', 'role' => 'search',
+            'aria-label' => self::t('filter_label_' . $section)]);
     }
 
     /**
-     * Offset pager with the page parameters.
+     * Moodle's paging bar (issue #31) for a section: first/previous, numbered pages, next/last, the current page marked.
      *
-     * @param moodle_url $base Base URL.
-     * @param array $params Parameters.
-     * @param string $name Offset parameter.
-     * @param int $offset Offset.
-     * @param int $limit Limit.
-     * @param int $total Total.
-     * @return string
+     * @param moodle_url $base Base URL (with scope).
+     * @param array $params Parameters of the section (filters, page size).
+     * @param string $pagevar Page parameter of the section.
+     * @param int $page Current page (0-based).
+     * @param int $perpage Page size.
+     * @param int $total Population.
+     * @return string '' for one page or none.
      */
-    public function offset_pager(moodle_url $base, array $params, string $name, int $offset, int $limit, int $total): string {
-        $links = [];
-        $params = array_diff_key($params, [$name => 1]);
-        if ($offset > 0) {
-            $prev = max(0, $offset - $limit);
-            $links[] = html_writer::link(
-                new moodle_url($base, $params + ($prev ? [$name => $prev] : [])),
-                self::t('gprevpage'),
-                ['class' => 'btn btn-secondary btn-sm mr-2 me-2 ltidiag-nav']
-            );
+    public function pager(moodle_url $base, array $params, string $pagevar, int $page, int $perpage, int $total): string {
+        if ($total <= $perpage) {
+            return '';
         }
-        if ($offset + $limit < $total) {
-            $links[] = html_writer::link(
-                new moodle_url($base, $params + [$name => $offset + $limit]),
-                self::t('gnextpage'),
-                ['class' => 'btn btn-secondary btn-sm ltidiag-nav']
-            );
-        }
-        return $links ? html_writer::tag('nav', implode('', $links), ['class' => 'mb-3',
-            'aria-label' => self::t('pager_label')]) : '';
+        $url = new moodle_url($base, array_diff_key($params, [$pagevar => 1]));
+        return html_writer::div(
+            $this->output->paging_bar($total, $page, $perpage, $url, $pagevar),
+            'ltidiag-pager',
+            ['data-pagevar' => $pagevar]
+        );
     }
-
 
     /**
      * Prerequisites of core's grade sync.
      *
      * @param array $p Prerequisites.
-     * @param array $resources Resources.
+     * @param array $resources Published resources to list (only those of the scope when a scope is set).
+     * @param bool $scoped Whether a course or activity scope is set.
      * @return string
      */
-    public function prerequisites(array $p, array $resources): string {
+    public function prerequisites(array $p, array $resources, bool $scoped = false): string {
         $yesno = fn(bool $b) => self::badge($b ? self::t('yes') : self::t('no'), $b ? 'green' : 'red');
         $rows = [];
-        $add = function (string $label, string $value) use (&$rows) {
-            $h = new html_table_cell(s($label));
+        $add = function (string $label, string $value, bool $html = false) use (&$rows) {
+            $h = new html_table_cell($html ? $label : s($label));
             $h->header = true;
             $h->scope = 'row';
             $rows[] = new html_table_row([$h, $value]);
@@ -462,10 +509,29 @@ class grades_renderer extends \plugin_renderer_base {
                 $r['gradesynccompletion'] ? self::t('gpre_gating_on') : self::t('gpre_gating_off'),
                 self::t('gpre_kind_' . ($r['kind'] ?: 'unknown')),
             ];
-            $add(self::t('gpre_resource', $rid), s(implode(' · ', $flags)) . html_writer::empty_tag('br') .
+            // The publication by its real name (activity or course) and id, with its own edit pencil (issue #30).
+            $label = self::t('gpre_publication', \tool_ltidiagnostics\local\names::publication($r));
+            // The pencil follows the name of the publication, before the line with its course.
+            $edit = \tool_ltidiagnostics\local\navigation::edit_publication((int) $r['courseid'], (int) ($r['enrolid'] ?? 0));
+            if ($edit) {
+                $label .= \tool_ltidiagnostics\local\navigation::pencil($edit, self::t(
+                    'nav_edit_publication_of',
+                    \tool_ltidiagnostics\local\names::plain(\tool_ltidiagnostics\local\names::publication($r))
+                ));
+            }
+            if ($r['cmid']) {
+                $label .= html_writer::empty_tag('br') . html_writer::span(self::t(
+                    'gpre_incourse',
+                    \tool_ltidiagnostics\local\names::course((int) $r['courseid'])
+                ), 'small text-muted');
+            }
+            $add($label, s(implode(' · ', $flags)) . html_writer::empty_tag('br') .
                 self::t('gpre_queue', (object) ['queued' => $queue['queued'], 'failed' => $queue['failed'],
                     'last' => $last ? userdate($last['time']) . ($last['failed'] ? ' (' . self::t('gpre_runfailed') . ')' : '')
-                        : self::t('gpre_nolog')]));
+                        : self::t('gpre_nolog')]), true);
+        }
+        if (!$resources) {
+            $add(self::t('gpre_publications'), self::t($scoped ? 'gpre_nopublication_scope' : 'gpre_nopublication'));
         }
         $add(self::t('gpre_tasklog'), $p['tasklogmode'] ? self::t('yes') : self::badge(self::t('no'), 'amber'));
         $table = new html_table();
@@ -475,7 +541,9 @@ class grades_renderer extends \plugin_renderer_base {
         $table->captionhide = true;
         $table->head = [self::t('gpre_item'), self::t('gpre_value')];
         $table->data = $rows;
-        return $this->output->heading(self::t('grades_prereq'), 3) . html_writer::div(
+        // Plugin, task and log settings are site-wide facts; say so when a scope is set (issue #29 AK3).
+        $note = $scoped ? html_writer::tag('p', self::t('gpre_global_note'), ['class' => 'small text-muted']) : '';
+        return $this->output->heading(self::t('grades_prereq'), 3) . $note . html_writer::div(
             html_writer::table($table),
             'table-responsive'
         ) . html_writer::tag(
@@ -529,7 +597,7 @@ class grades_renderer extends \plugin_renderer_base {
      */
     public function rows(array $d, array $ctx): string {
         $rows = [];
-        $select = !empty($ctx['canrepair']) && !empty($ctx['selectable']);
+        $select = !empty($ctx['selectable']);
         $userids = array_map(fn($r) => (int) $r['userid'], $d['rows']);
         if (!empty($ctx['names'])) {
             \tool_ltidiagnostics\local\identity::preload($userids);
@@ -611,7 +679,7 @@ class grades_renderer extends \plugin_renderer_base {
                 );
             }
             $res = $d['resources'][$link['toolid']] ?? null;
-            $where = $res ? \tool_ltidiagnostics\local\identity::cm_html((int) $res['cmid'])
+            $where = $res ? \tool_ltidiagnostics\local\identity::cm_html((int) $res['cmid'], (int) $res['courseid'])
                 ?: \tool_ltidiagnostics\local\identity::course_html((int) $res['courseid']) : '';
             $cells = [];
             if ($select) {
@@ -918,6 +986,51 @@ class grades_renderer extends \plugin_renderer_base {
     }
 
     /**
+     * Read-only AGS result check of a selection (issue #32): before the confirmation the targets, afterwards the verdict
+     * of each target. Nothing is sent to the consumer; one GET of the result service per target.
+     *
+     * @param array $selection Selection (pairs, origin, expires).
+     * @param array[]|null $results Results of results_checker::check_link() per target (null: not run yet).
+     * @param array $ctx key, sel, pageurl.
+     * @return string
+     */
+    public function bulk_resultcheck(array $selection, ?array $results, array $ctx): string {
+        \tool_ltidiagnostics\local\identity::preload(array_column($selection['pairs'], 'userid'));
+        $o = html_writer::tag('p', self::t('gsel_check_desc', (object) [
+            'count' => count($selection['pairs']),
+            'origin' => self::t('gsel_origin_' . $selection['origin']),
+        ]), ['id' => 'tool_ltidiagnostics_check_summary']);
+        $rows = [];
+        foreach ($results ?? $selection['pairs'] as $r) {
+            $h = new html_table_cell(\tool_ltidiagnostics\local\identity::person_html($ctx['key'], (int) $r['userid']));
+            $h->header = true;
+            $h->scope = 'row';
+            $cells = [$h, (string) (int) $r['linkid']];
+            if ($results !== null) {
+                $cells[] = $r['errorclass'] !== '' ? self::badge(self::label('gerr_', $r['errorclass']), 'amber')
+                    : self::badge(self::t('gbook_' . $r['verdict']), $r['verdict'] === 'results_match' ? 'green' : 'red');
+            }
+            $rows[] = new html_table_row($cells);
+        }
+        $table = new html_table();
+        $table->id = 'tool_ltidiagnostics_check_targets';
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->caption = self::t('gsel_check_title');
+        $table->head = array_merge([self::t('gperson'), self::t('glink')], $results !== null ? [self::t('gbooking')] : []);
+        $table->data = $rows;
+        $o .= html_writer::div(html_writer::table($table), 'table-responsive');
+        if ($results === null) {
+            $o .= html_writer::tag('form', html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',
+                'value' => sesskey()]) . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'confirmcheck',
+                'value' => 1]) . html_writer::tag('button', self::t('gsel_check_run'), ['type' => 'submit',
+                'class' => 'btn btn-primary']), ['method' => 'post', 'action' => $ctx['pageurl']->out(false),
+                'id' => 'tool_ltidiagnostics_check_confirm']);
+            $o .= html_writer::tag('p', self::t('gsel_check_note'), ['class' => 'small text-muted mt-2']);
+        }
+        return $o;
+    }
+
+    /**
      * Status of a confirmed selection: every attempt with its own state and booking.
      *
      * @param \stdClass[] $rows Journal rows of the batch.
@@ -1129,13 +1242,9 @@ class grades_renderer extends \plugin_renderer_base {
                 : [self::t('gperson'), self::t('compl_cm'), self::t('compl_desired'), self::t('compl_version'),
                     self::t('compl_class'), self::t('gcorrelation')];
             $table->data = $data;
-            $o .= html_writer::div(html_writer::table($table), 'table-responsive');
-            $o .= $this->pager(
-                $pageurl,
-                $v['offset'],
-                \tool_ltidiagnostics\local\completion\completion_view::PAGESIZE,
-                $v['total']
-            );
+            $size = \tool_ltidiagnostics\local\completion\completion_view::PAGESIZE;
+            $pager = $this->pager($pageurl, [], 'cpage', intdiv((int) $v['offset'], $size), $size, (int) $v['total']);
+            $o .= $pager . html_writer::div(html_writer::table($table), 'table-responsive') . $pager;
         }
         $o .= html_writer::tag('p', self::t('compl_native'), ['class' => 'small text-muted']);
         $o .= html_writer::link(
@@ -1175,33 +1284,5 @@ class grades_renderer extends \plugin_renderer_base {
         $table->head = [self::t('actions'), self::t('compl_reach')];
         $table->data = $rows;
         return $o . html_writer::div(html_writer::table($table), 'table-responsive');
-    }
-
-    /**
-     * Previous/next links for offset paging.
-     *
-     * @param moodle_url $url Page URL.
-     * @param int $offset Offset.
-     * @param int $limit Limit.
-     * @param int $total Total.
-     * @return string
-     */
-    private function pager(moodle_url $url, int $offset, int $limit, int $total): string {
-        $links = [];
-        if ($offset > 0) {
-            $links[] = html_writer::link(
-                new moodle_url($url, ['offset' => max(0, $offset - $limit)]),
-                self::t('gprevpage'),
-                ['class' => 'btn btn-secondary btn-sm mr-2 me-2']
-            );
-        }
-        if ($offset + $limit < $total) {
-            $links[] = html_writer::link(
-                new moodle_url($url, ['offset' => $offset + $limit]),
-                self::t('gnextpage'),
-                ['class' => 'btn btn-secondary btn-sm']
-            );
-        }
-        return $links ? html_writer::div(implode('', $links), 'mb-3') : '';
     }
 }

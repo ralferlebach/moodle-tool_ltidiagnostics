@@ -4,6 +4,58 @@ Status classes (COMMON brief): **CP** code present / **TL** tests executed local
 accepted / **NV** not verified. Nothing is marked CI or FA yet: no CI run happened, and the owner has not accepted anything.
 "TL" means the named test passed on all four tree/database combinations listed below unless stated otherwise.
 
+## Release 0.6.0 / 2026110301 (issues #29 to #32, 2026-11-03)
+
+Rework of the 0.5.0 UX after the owner's review of 2026-11-03 (header button forest, course filter showing unrelated
+connections, edit links without names, unwieldy filters and counters, missing checkboxes and paging bars). Evidence
+classes as above; nothing is **CI** (no push by us) or **FA** (owner acceptance pending).
+
+| Issue | AK / DoD item | Status | Evidence |
+|---|---|---|---|
+| #29 | AK1 positive core mappings only; role and course id 0 never a match | TL | `scope_isolation_test::test_course_filter_isolates_connections`, `inventory_test::test_course_filter` |
+| #29 | AK2 course and activity filter in the overview; activity excludes course-wide publications | TL | `test_activity_filter_isolates_connections`, `test_overview_rendering`, Behat overview course filter, E2E #29/#30 |
+| #29 | AK3 prerequisites, findings, publications, rows, totals, journal, completion, exports in the same scope; global facts marked | TL | `test_grade_channel_scope`, `channels_output_test::test_grade_tab_follows_scope`, Behat grade tab of a foreign course, E2E (rows 0, export and support package links carry the scope) |
+| #29 | AK4 fail closed on unknown or contradictory course/activity | TL | `test_invalid_scope_fails_closed`, Behat unknown course, E2E `courseid=999999` |
+| #29 | AK5 filter before counting, paging, select all, preview, export | TL | one SQL population (`pair_query`), `scope_toolids` = [] for a foreign course, selection hidden inputs carry the scope |
+| #29 | AK6 "Name (id: n)" | TL | `test_names`, Behat ("Graded task (id:") |
+| #29 | AK7 tab switch, AJAX, back, reload, URLs keep the scope; empty states | TL | E2E (open link, back link, reload, reset), scope bar on every tab (0.5.0 tests) |
+| #29 | DoD fixture with >= 3 courses, 2 activities each, several deployments, both roles, course-wide publications, shared registration, unassigned link | TL | `scope_isolation_test::build()` |
+| #29 | DoD query budget | TL | `test_overview_query_budget` (< 120 reads with 15 more courses), names and course contexts in bulk |
+| #30 | AK1 header: back link, name with ids, one pencil | TL | `renderer::connection_header`, Behat and E2E (one `a.ltidiag-edit` in the heading, no "Edit deployments") |
+| #30 | AK2/AK4 pencil in the row of its object, standard icon, localised accessible name | TL | `test_labels_and_edit_targets` (label escaped once), overview "Used in", grade prerequisites, Behat `aria-label^='Edit publication Graded task'` |
+| #30 | AK5 core target with capability; missing course or module | TL | `test_labels_and_edit_targets`, `test_names` (deleted activity) |
+| #30 | AK6 no broken links, no N+1 | TL | edit targets only for existing scripts and contexts; `test_overview_query_budget` |
+| #30 | AK7 DE/EN, responsive | TL / NV | `lang_test`, screenshots en/de; narrow window and 200 % zoom are item 7 of the manual checklist |
+| #31 | AK1/AK2 core `paging_bar` above and below | TL | `pagination_test::test_pager_boundaries`, `test_journal_section_range_and_pagers`, E2E (two bars per block) |
+| #31 | AK3/AK4 page sizes 20/50/100/500 (default 50), page 1 on change, 0/1 page without a bar, "X-Y of Z" | TL | `test_page_sizes`, `test_pager_boundaries` (0, 1, 50, 51, 500, 501, 100 000) |
+| #31 | AK5 stable journal pages (timecreated DESC, id DESC, snapshot) | TL | `test_journal_numbered_pages_are_stable`, Behat journal paging, E2E journal pages |
+| #31 | AK6/AK7 independent parameters, AJAX, history, non-JS | TL | `test_independent_page_parameters`, E2E (back keeps the other block's page, tampered `gpage`) |
+| #31 | AK8/AK9 select all shown = current page; server limit 500; tampered values | TL | E2E select all shown, `sections::size`, `clamp_page` |
+| #32 | AK1/AK2 compact one-row toolbars for rows and journal | TL | E2E: every control of both toolbars ends on one line at 1280 px |
+| #32 | AK3 counters folded under one line, correct, no "Open work" | TL | E2E (details closed, opens), 0.5.0 counter invariants, Behat |
+| #32 | AK4/AK5 checkboxes and select all by right, independent of the opt-in; selection never sends | TL | `test_selection_by_right_independent_of_optin`, Behat read-only result check, E2E bulk replay with explicit action |
+| #32 | AK6/AK7 scope, filters, counters, selection agree; a11y, DE/EN, no N+1 | TL | axe on 13 views x 2 languages, `lang_test` |
+
+Runs (2026-11-03, plugin version 2026110301):
+
+| Cell | Result |
+|---|---|
+| Moodle 4.5.15+ / PostgreSQL 16 / PHP 8.3 | `check_ci.sh --behat`: phplint, validate, savepoints, mustache, codechecker (0 warnings), phpdoc, PHPUnit 691 tests OK, deprecation report clean, Behat 32 scenarios passed |
+| Moodle 4.5.15+ / MariaDB 10.11 / PHP 8.3 | PHPUnit 691 tests OK |
+| Moodle 5.2.4+ / PostgreSQL 16 / PHP 8.3 | PHPUnit 691 tests OK (PHPUnit 11 docblock deprecations, kept on purpose while 4.5 is supported) |
+| Moodle 5.3+ / PostgreSQL 17 / PHP 8.3 | PHPUnit 691 tests OK (same note) |
+| Two sites 4.5 tool -> 5.2 platform | Playwright `playwright.channels.config.js`: 31 tests passed (grades 11, completion 8, UX 12) |
+| PHP 8.2 and 8.4, MariaDB on 5.x | NV locally (no such PHP in the container); covered by the GitHub matrix after a push by the owner |
+
+An independent read-only review of the change set found no high-severity defect. Fixed after it: an invalid period alone
+now also empties the grade channel, the bulk selection and the support package (`invalidscope`); log events of a
+platform tool type are no longer attributed by course alone; raw period input in the scope chip is escaped; the
+history pager keeps the scope; completion and audit page numbers are clamped; without JavaScript a section keeps the
+state of the other section of its tab; the bulk result check is audited (`graderesult_bulkcheck`); activities being
+deleted no longer count as use; three tests were tightened (open link href, query growth between two sizes, invalid
+period in all consumers). Left as is: the AGS result check is not gated by the "active checks" setting (as the single
+check of 0.5.0), and the completion list keeps its fixed page size of 100.
+
 ## Release 0.5.0 / 2026110300 (issues #10 to #28, 2026-11-03)
 
 Evidence classes as above (CP, TL, CI, FA, NV). Nothing is **CI** (no GitHub run by us, no push) or **FA** (owner

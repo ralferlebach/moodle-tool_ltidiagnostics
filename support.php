@@ -41,9 +41,9 @@ use tool_ltidiagnostics\local\support;
 
 $key = optional_param('key', '', PARAM_RAW);
 $search = trim(optional_param('search', '', PARAM_TEXT));
-$offset = max(0, optional_param('offset', 0, PARAM_INT));
+$pagenum = max(0, optional_param('spage', 0, PARAM_INT));
 $url = new moodle_url('/admin/tool/ltidiagnostics/support.php', array_filter(['key' => $key, 'search' => $search,
-    'offset' => $offset]));
+    'spage' => $pagenum]));
 admin_externalpage_setup('tool_ltidiagnostics_support', '', null, $url);
 $context = context_system::instance();
 require_capability('tool/ltidiagnostics:viewsupport', $context);
@@ -192,7 +192,8 @@ if ($search !== '') {
 }
 $total = count($connections);
 $perpage = 10;
-$page = array_slice($connections, $offset, $perpage);
+$pagenum = \tool_ltidiagnostics\output\sections::clamp_page($pagenum, $perpage, $total);
+$page = array_slice($connections, $pagenum * $perpage, $perpage);
 $table = new html_table();
 $table->id = 'tool_ltidiagnostics_support_cases';
 $table->attributes['class'] = 'generaltable table-sm';
@@ -220,14 +221,17 @@ foreach ($page as $c) {
     $row->attributes['data-code'] = $case['code'];
     $table->data[] = $row;
 }
-echo $table->data ? html_writer::div(html_writer::table($table), 'table-responsive')
-    : html_writer::tag('p', $t('noconnections'), ['class' => 'alert alert-info']);
-echo $PAGE->get_renderer('tool_ltidiagnostics', 'grades')->offset_pager(
-    $url,
+// The core paging bar above and below the list (issue #31).
+$pager = $PAGE->get_renderer('tool_ltidiagnostics', 'grades')->pager(
+    new moodle_url('/admin/tool/ltidiagnostics/support.php'),
     array_filter(['search' => $search]),
-    'offset',
-    $offset,
+    'spage',
+    $pagenum,
     $perpage,
     $total
 );
+echo $pager;
+echo $table->data ? html_writer::div(html_writer::table($table), 'table-responsive')
+    : html_writer::tag('p', $t('noconnections'), ['class' => 'alert alert-info']);
+echo $pager;
 echo $output->footer();

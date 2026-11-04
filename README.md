@@ -8,7 +8,7 @@ specified, implemented, enabled, declared, authorised, reachable and really obse
 what an administrator can do next. A feature is only reported as **verified** when a real transaction was observed.
 An enabled checkbox or a reachable endpoint is never enough.
 
-Status: alpha (0.5.0, version 2026110300). See `docs/ACCEPTANCE.md` for what is proven and what is not, and
+Status: alpha (0.6.0, version 2026110301). See `docs/ACCEPTANCE.md` for what is proven and what is not, and
 `docs/GRADES.md` for the grade and completion channels.
 
 
@@ -39,6 +39,7 @@ See http://docs.moodle.org/en/Installing_plugins for details on installing Moodl
 
 Notes:
 
+* Upgrading from 0.5.0 needs no upgrade step (0.6.0 changes no table and no setting).
 * Upgrading from 0.4.0 runs step 2026110300: the grade journal gets a batch id column and the lifetime of a bulk
   selection (`selectionttl`) is added. Nothing existing is changed.
 * Upgrading from 0.3.0 runs step 2026110200: three new tables (grade attempt journal, score state, grade receipts) and
@@ -73,11 +74,19 @@ the top of the site administration. Moodle shows the *Site administration* menu 
 `moodle/site:configview`; give that capability to delegated roles that should use the menu (the pages are reachable by
 URL and through the quick links of the overview without it).
 
-Every page has a link back to the overview with its filters. Above the tabs of a connection a scope bar restricts the
-report to a course, an activity and a period (calendar days in your time zone; times in tables are UTC); tabs that show
-system-wide facts say so. Tables with many rows (grade rows, grade journal, evidence, timeline) have filters and page
-sizes 20, 50, 100 and 500 that load without reloading the page and keep the browser history; everything also works
-without JavaScript.
+The overview of connections is filtered in one row by text, role, course and activity. A connection belongs to a
+course or activity only when it is proven to be used there (a resource link to a publication of that course or
+activity; an external tool activity; a tool type bound to the course); a site-wide tool type or the role alone never
+counts, and an unknown course or activity shows nothing. "Used in" names the publications, activities and courses of
+each connection, "Name (id: 12)", each with the standard edit pencil when you may edit it.
+
+Every page has a link back to the overview with its filters. The header of a connection holds that link, the name with
+its local ids and one pencil for the registration or tool type. Above the tabs a scope bar restricts the report to a
+course, an activity and a period (calendar days in your time zone; times in tables are UTC); tabs that show
+system-wide facts say so, and exports and the support package hold the same population. Tables with many rows (grade
+rows, grade journal, evidence, timeline, completion, history, support, audit) have compact one-row filters, page sizes
+20, 50, 100 and 500 and the core paging bar above and below the table; they load without reloading the page and keep
+the browser history; everything also works without JavaScript. Journal pages stay stable while new attempts arrive.
 
 * **Connection inventory.** Lists the connections of both roles: LTI 1.3 tool types of mod_lti (Moodle as platform)
   and registrations and deployments of enrol_lti (Moodle as tool). Filter by role, text and course.

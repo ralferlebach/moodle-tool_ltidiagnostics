@@ -59,6 +59,13 @@ class connection {
     public $facts = [];
     /** @var array[] Published tools (tool role): each with id, name, flags. */
     public $tools = [];
+    /**
+     * @var array[] Proven use in courses and activities (issue #29), from core mappings only: tool role - published
+     * resources reached through resource links of the deployment; platform role - external tool activities of the type
+     * and a type created for one course. Each: kind (publication, activity, course_type), courseid, cmid (0: course
+     * level), toolid, enrolid.
+     */
+    public $usage = [];
 
     /**
      * Build a key.

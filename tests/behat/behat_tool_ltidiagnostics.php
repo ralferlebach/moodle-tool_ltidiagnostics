@@ -222,4 +222,97 @@ class behat_tool_ltidiagnostics extends behat_base {
         \tool_ltidiagnostics\local\audit::log('export', 'tool:' . $reg->id . ':' . $dep, 'format=json', $userid);
         \tool_ltidiagnostics\local\audit::log('view_grades', 'tool:' . $reg->id . ':' . $dep, '', $userid);
     }
+
+    /**
+     * A second registration whose only publication is a whole other course (for the course filter, issue #29).
+     *
+     * @Given /^an LTI registration "(?P<name>(?:[^"]|\\")*)" uses a publication of the course "(?P<course>(?:[^"]|\\")*)"$/
+     * @param string $name Registration name.
+     * @param string $coursename Course full name (created).
+     */
+    public function an_lti_registration_uses_a_course_publication(string $name, string $coursename): void {
+        global $DB;
+        $gen = behat_util::get_data_generator();
+        $course = $gen->create_course(['fullname' => $coursename, 'shortname' => 'c' . random_string(6)]);
+        $tool = $gen->create_lti_tool((object) ['courseid' => $course->id, 'ltiversion' => 'LTI-1p3']);
+        $issuer = 'https://' . strtolower(preg_replace('/[^a-z0-9]+/i', '', $name)) . '.example.org';
+        $reg = $gen->get_plugin_generator('enrol_lti')->create_application_registration(['name' => $name,
+            'platformid' => $issuer, 'clientid' => 'client-' . random_string(4), 'authrequesturl' => $issuer . '/auth',
+            'jwksurl' => $issuer . '/jwks', 'accesstokenurl' => $issuer . '/token', 'deploymentname' => $name . ' deployment',
+            'deploymentid' => '1']);
+        $dep = (int) $DB->get_field('enrol_lti_deployment', 'id', ['platformid' => $reg->get_id()]);
+        $DB->insert_record('enrol_lti_resource_link', (object) ['resourcelinkid' => 'rl-' . random_string(4),
+            'ltideploymentid' => $dep, 'resourceid' => $tool->id, 'timecreated' => time(), 'timemodified' => time()]);
+    }
+
+    /**
+     * Choose a course in a course select by its name (the option also carries the id: "Name (id: n)").
+     *
+     * @When /^I choose the course "(?P<course>(?:[^"]|\\")*)" in the LTI field "(?P<field>(?:[^"]|\\")*)"$/
+     * @param string $coursename Course full name.
+     * @param string $field Field label.
+     */
+    public function i_choose_the_course_in_the_lti_field(string $coursename, string $field): void {
+        global $DB;
+        $id = (int) $DB->get_field('course', 'id', ['fullname' => $coursename], MUST_EXIST);
+        $this->execute('behat_forms::i_set_the_field_to', [$field, $coursename . ' ' .
+            get_string('id_idsuffix', 'tool_ltidiagnostics', $id)]);
+    }
+
+    /**
+     * Open a tab of a tool side connection restricted to a course.
+     *
+     * @Given /^I open the LTI diagnostics tab "(?P<tab>[a-z]+)" of registration "(?P<name>[^"]*)" in course "(?P<course>[^"]*)"$/
+     * @param string $tab Tab.
+     * @param string $name Registration name.
+     * @param string $coursename Course full name.
+     */
+    public function i_open_the_tab_in_course(string $tab, string $name, string $coursename): void {
+        global $DB;
+        $reg = $DB->get_record('enrol_lti_app_registration', ['name' => $name], '*', MUST_EXIST);
+        $dep = $DB->get_field('enrol_lti_deployment', 'id', ['platformid' => $reg->id], MUST_EXIST);
+        $courseid = (int) $DB->get_field('course', 'id', ['fullname' => $coursename], MUST_EXIST);
+        $this->execute('behat_general::i_visit', [new moodle_url(
+            '/admin/tool/ltidiagnostics/connection.php',
+            ['key' => 'tool:' . $reg->id . ':' . $dep, 'tab' => $tab, 'courseid' => $courseid]
+        )]);
+    }
+
+    /**
+     * Fill the grade journal of a connection (for the journal paging, issue #31).
+     *
+     * @Given /^the LTI grade journal of registration "(?P<name>(?:[^"]|\\")*)" has (?P<count>\d+) entries$/
+     * @param string $name Registration name.
+     * @param int $count Entries.
+     */
+    public function the_journal_has_entries(string $name, int $count): void {
+        global $DB;
+        $reg = $DB->get_record('enrol_lti_app_registration', ['name' => $name], '*', MUST_EXIST);
+        $dep = (int) $DB->get_field('enrol_lti_deployment', 'id', ['platformid' => $reg->id], MUST_EXIST);
+        $link = $DB->get_record('enrol_lti_resource_link', ['ltideploymentid' => $dep], '*', IGNORE_MULTIPLE);
+        $userid = (int) $DB->get_field('user', 'id', ['username' => 'learner1']);
+        for ($i = 1; $i <= $count; $i++) {
+            \tool_ltidiagnostics\local\grades\journal::insert(['connkey' => 'tool:' . $reg->id . ':' . $dep,
+                'deploymentrowid' => $dep, 'resourcelinkrowid' => (int) ($link->id ?? 0),
+                'toolid' => (int) ($link->resourceid ?? 0), 'userid' => $userid, 'state' => 'http_accepted',
+                'timecreated' => time() - $i]);
+        }
+    }
+
+    /**
+     * Open the grade tab with a journal page size.
+     *
+     * @When /^I visit the LTI diagnostics grade journal of registration "(?P<name>[^"]*)" with (?P<size>\d+) entries per page$/
+     * @param string $name Registration name.
+     * @param int $size Page size.
+     */
+    public function i_visit_the_journal_with_page_size(string $name, int $size): void {
+        global $DB;
+        $reg = $DB->get_record('enrol_lti_app_registration', ['name' => $name], '*', MUST_EXIST);
+        $dep = $DB->get_field('enrol_lti_deployment', 'id', ['platformid' => $reg->id], MUST_EXIST);
+        $this->execute('behat_general::i_visit', [new moodle_url(
+            '/admin/tool/ltidiagnostics/connection.php',
+            ['key' => 'tool:' . $reg->id . ':' . $dep, 'tab' => 'grades', 'jperpage' => $size]
+        )]);
+    }
 }

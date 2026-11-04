@@ -215,7 +215,12 @@ class evidence_query {
         if (!$log['available']) {
             return ['rows' => [], 'total' => 0, 'available' => false, 'reason' => 'logstore_' . $log['reason']];
         }
-        $courses = array_flip(navigation::published_courses($conn));
+        // Courses that publish a resource through this connection (tool role). A course of a platform tool type is no
+        // proof that an event of that course belongs to the type (issue #29): platform events stay unassigned.
+        $courses = array_flip(array_unique(array_column(
+            array_filter($conn->usage, fn(array $u) => $u['kind'] === 'publication'),
+            'courseid'
+        )));
         $rows = [];
         foreach ($log['rows'] as $r) {
             $rows[] = [

@@ -107,6 +107,11 @@ $PAGE->requires->js_call_amd('tool_ltidiagnostics/sections', 'init', []);
 echo $output->header();
 echo $output->connection_header($conn);
 echo $output->scope_bar($conn, $scope, $tab);
+$scoped = ($scope->courseid || $scope->cmid) && !$scope->invalid;
+if ($scoped && !inventory::in_scope($conn, (int) $scope->courseid, (int) $scope->cmid)) {
+    // Fail closed (issue #29): the scoped views of this connection are empty, and the page says why.
+    echo $output->notification(get_string('scope_conn_notused', 'tool_ltidiagnostics'), \core\output\notification::NOTIFY_INFO);
+}
 
 $tabobjects = [];
 foreach ($tabs as $t) {
@@ -175,7 +180,7 @@ if ($tab === 'matrix') {
         $diag = (new \tool_ltidiagnostics\local\grades\grade_diagnosis())->run($conn, [
             'limit' => \tool_ltidiagnostics\local\grades\grade_diagnosis::MAXPAGE, 'reveal' => false,
             'showscores' => $ctx['showscores'], 'now' => $now,
-            'courseid' => $scope->courseid, 'cmid' => $scope->cmid,
+            'courseid' => $scope->courseid, 'cmid' => $scope->cmid, 'invalidscope' => $scope->invalid,
         ]);
         $rows = sections::render($conn, 'grades_rows', $q, $scope);
         $journal = sections::render($conn, 'grades_journal', $q, $scope);
@@ -212,8 +217,14 @@ if ($tab === 'matrix') {
         echo $gout->completion_unavailable($completionstate);
     } else {
         echo $output->scope_note('applies', $scope);
-        $view = (new completion_view())->build($conn, ['offset' => optional_param('offset', 0, PARAM_INT),
-            'courseid' => $scope->courseid, 'cmid' => $scope->cmid]);
+        $coptions = ['courseid' => $scope->courseid, 'cmid' => $scope->cmid, 'invalidscope' => $scope->invalid];
+        $cpage = max(0, optional_param('cpage', 0, PARAM_INT));
+        $view = (new completion_view())->build($conn, ['offset' => $cpage * completion_view::PAGESIZE] + $coptions);
+        // A page number behind the last page shows the last page (issue #31).
+        $clamped = sections::clamp_page($cpage, completion_view::PAGESIZE, (int) $view['total']);
+        if ($clamped !== $cpage) {
+            $view = (new completion_view())->build($conn, ['offset' => $clamped * completion_view::PAGESIZE] + $coptions);
+        }
         echo $gout->completion_tab($view, new moodle_url($pageurl));
     }
 } else if ($tab === 'timeline') {
@@ -237,7 +248,7 @@ if ($tab === 'matrix') {
     echo sections::wrap('evidence', $key, $section['html']);
 } else if ($tab === 'history') {
     echo $output->scope_note('systemwide', $scope);
-    echo $output->history_tab($key, optional_param('hoffset', 0, PARAM_INT));
+    echo $output->history_tab($key, optional_param('hpage', 0, PARAM_INT), $scope->params());
 }
 
 if (has_capability('tool/ltidiagnostics:export', $context)) {
@@ -252,7 +263,8 @@ if (has_capability('tool/ltidiagnostics:export', $context)) {
         echo html_writer::tag('p', get_string('gpkg_export_desc', 'tool_ltidiagnostics'), ['class' => 'small text-muted']);
         foreach (\tool_ltidiagnostics\local\grades\support_package::FORMATS as $format) {
             echo html_writer::link(
-                new moodle_url('/admin/tool/ltidiagnostics/package.php', $exportbase + ['format' => $format]),
+                new moodle_url('/admin/tool/ltidiagnostics/package.php', $exportbase + ['format' => $format] +
+                    $scope->params()),
                 get_string('gpkg_export_' . $format, 'tool_ltidiagnostics'),
                 ['class' => 'btn btn-secondary mr-2 me-2',
                 'id' => 'tool_ltidiagnostics_pkg_' . $format]

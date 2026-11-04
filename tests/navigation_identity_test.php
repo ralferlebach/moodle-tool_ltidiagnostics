@@ -127,10 +127,11 @@ final class navigation_identity_test extends \advanced_testcase {
     }
 
     /**
-     * Connection labels carry the name and each local id with its own label; core edit links exist only with the
-     * matching core capability.
+     * Connection labels carry the name and each local id with its own label; the one edit target of a connection (its
+     * registration or tool type) and the edit target of a publication exist only with the matching core capability
+     * (issue #30).
      */
-    public function test_labels_and_core_links(): void {
+    public function test_labels_and_edit_targets(): void {
         $this->resetAfterTest();
         $tool = new connection();
         $tool->role = connection::ROLE_TOOL;
@@ -151,16 +152,35 @@ final class navigation_identity_test extends \advanced_testcase {
         $platform->key = 'platform:3';
         $this->assertStringContainsString(get_string('nav_ids_platform', 'tool_ltidiagnostics', 3), navigation::label($platform));
 
+        $course = $this->getDataGenerator()->create_course(['fullname' => 'Physics & Co']);
+        $enrolid = (int) $this->getDataGenerator()->get_plugin_generator('enrol_lti')->create_published_resource([
+            'name' => 'Course', 'courseid' => $course->id, 'activityid' => null, 'ltiversion' => 'LTI-1p3',
+        ])->enrolid;
+
         $this->setAdminUser();
-        $kinds = array_column(navigation::core_links($tool), 'kind');
-        $this->assertContains('registration', $kinds);
-        $this->assertContains('deployments', $kinds);
-        $links = navigation::core_links($platform);
-        $this->assertSame(['tooltype'], array_column($links, 'kind'));
-        $this->assertStringContainsString('/mod/lti/typessettings.php', $links[0]['url']->out(false));
+        $edit = navigation::edit_connection($tool);
+        $this->assertStringContainsString('/enrol/lti/register_platform.php', $edit['url']->out(false));
+        $this->assertSame('7', (string) $edit['url']->get_param('regid'));
+        $this->assertSame(get_string('nav_edit_registration_of', 'tool_ltidiagnostics', 'Partner A'), $edit['label']);
+        $edit = navigation::edit_connection($platform);
+        $this->assertStringContainsString('/mod/lti/typessettings.php', $edit['url']->out(false));
+        $this->assertSame('3', (string) $edit['url']->get_param('id'));
+        $url = navigation::edit_publication((int) $course->id, $enrolid);
+        $this->assertStringContainsString('/enrol/editinstance.php', $url->out(false));
+        $this->assertSame((string) $enrolid, (string) $url->get_param('id'));
+        $this->assertNull(navigation::edit_publication(999999, $enrolid), 'No target for a missing course.');
+        $this->assertNull(navigation::edit_publication((int) $course->id, 0));
+
+        // The pencil: the standard icon, an accessible name, the label escaped exactly once.
+        $pencil = navigation::pencil($url, 'Edit Physics & Co');
+        $this->assertStringContainsString('aria-label="Edit Physics &amp; Co"', $pencil);
+        $this->assertStringNotContainsString('&amp;amp;', $pencil);
+        $this->assertStringContainsString('ltidiag-edit', $pencil);
+
         $this->setUser($this->user_with(['view']));
-        $this->assertSame([], navigation::core_links($tool), 'No core edit link without moodle/site:config.');
-        $this->assertSame([], navigation::core_links($platform));
+        $this->assertNull(navigation::edit_connection($tool), 'No edit target without moodle/site:config.');
+        $this->assertNull(navigation::edit_connection($platform));
+        $this->assertNull(navigation::edit_publication((int) $course->id, $enrolid), 'No edit target without enrol/lti:config.');
     }
 
     /**

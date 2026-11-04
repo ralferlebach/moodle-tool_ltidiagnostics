@@ -185,10 +185,15 @@ if ($attemptid !== '') {
 }
 
 if ($action === 'select') {
-    // Selection of replay targets (issue #22): marked rows, all rows of the page or every match of the filters. Only the
-    // selection is stored; nothing is sent before its preview was confirmed.
+    // Selection of targets (issues #22, #32): marked rows, all rows of the page or every match of the filters, for the
+    // read-only AGS result check or for the grade replay. Only the selection is stored; nothing is read from or sent to
+    // the consumer before the preview of the action was confirmed.
     require_sesskey();
-    require_capability('tool/ltidiagnostics:repairgrades', $context);
+    $bulkaction = optional_param('bulkaction', 'replay', PARAM_ALPHA) === 'resultcheck' ? 'resultcheck' : 'replay';
+    require_capability(
+        $bulkaction === 'resultcheck' ? 'tool/ltidiagnostics:runchecks' : 'tool/ltidiagnostics:repairgrades',
+        $context
+    );
     if ($conn->role !== connection::ROLE_TOOL) {
         throw new \moodle_exception('greplay_notavailable', 'tool_ltidiagnostics');
     }
@@ -203,7 +208,7 @@ if ($action === 'select') {
         'flink' => optional_param('flink', 0, PARAM_INT),
         'fsearch' => trim(optional_param('fsearch', '', PARAM_TEXT)),
         'perpage' => optional_param('perpage', 0, PARAM_INT),
-        'offset' => optional_param('offset', 0, PARAM_INT),
+        'gpage' => optional_param('gpage', 0, PARAM_INT),
     ]);
     $back = new moodle_url($gradesurl, $scope->params() + $keep, 'tool_ltidiagnostics_rows');
     $mode = optional_param('selectmode', 'rows', PARAM_ALPHA);
@@ -236,7 +241,7 @@ if ($action === 'select') {
             : optional_param_array('pairs', [], PARAM_RAW);
         $pairs = \tool_ltidiagnostics\local\grades\selection::parse(array_map('strval', (array) $values));
     }
-    $r = \tool_ltidiagnostics\local\grades\selection::create($key, $pairs, $mode, $filters, $now);
+    $r = \tool_ltidiagnostics\local\grades\selection::create($key, $pairs, $mode, $filters, $now, $bulkaction);
     if (!$r['ok']) {
         redirect(
             $back,
@@ -285,6 +290,28 @@ if ($sel !== '') {
     $selection = \tool_ltidiagnostics\local\grades\selection::get($sel, $key, $now);
     if (!$selection) {
         redirect($gradesurl, get_string('gsel_expired', 'tool_ltidiagnostics'), null, \core\output\notification::NOTIFY_ERROR);
+    }
+    if (($selection['action'] ?? 'replay') === 'resultcheck') {
+        // Read-only AGS result check of a selection (issue #32): preview of the targets, then one GET per target.
+        require_capability('tool/ltidiagnostics:runchecks', $context);
+        $results = null;
+        if (optional_param('confirmcheck', 0, PARAM_BOOL)) {
+            require_sesskey();
+            \tool_ltidiagnostics\local\grades\selection::drop($sel);
+            // The bulk check itself is audited with its size; each verdict is audited by the checker as well.
+            \tool_ltidiagnostics\local\audit::log('graderesult_bulkcheck', $key, 'targets=' . count($selection['pairs']));
+            $checker = new \tool_ltidiagnostics\local\grades\results_checker();
+            $results = [];
+            foreach ($selection['pairs'] as $pair) {
+                $results[] = $pair + $checker->check_link($conn, (int) $pair['linkid'], (int) $pair['userid']);
+            }
+        }
+        echo $output->header();
+        echo $output->heading(get_string('gsel_check_title', 'tool_ltidiagnostics'));
+        echo $back;
+        echo $output->bulk_resultcheck($selection, $results, ['key' => $key, 'sel' => $sel, 'pageurl' => $pageurl]);
+        echo $output->footer();
+        die;
     }
     foreach ($selection['pairs'] as $pair) {
         $previews[$pair['linkid'] . ':' . $pair['userid']] = $service->preview($conn, $pair['linkid'], $pair['userid']) +

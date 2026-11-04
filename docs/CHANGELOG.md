@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.0 - 2026-11-03 (alpha), version 2026110301
+
+Issues #29 to #32 (rework of the 0.5.0 UX after the owner's review). No database change: there is no upgrade step,
+the version only moves from 2026110300 to 2026110301. `classes/form/filter_form.php` (the old moodleform of the
+overview) is removed.
+
+* **#29 Course and activity filter (P0).** A connection belongs to a course or activity only through a positive core
+  mapping: tool role registration -> deployment -> resource link -> published resource (`enrol_lti_tools`) -> course or
+  course module; platform role tool type -> `lti` activity -> course module, or a tool type bound to a course. The role
+  of a connection and a site-wide tool type (course id 0) are never a match on their own; an activity filter does not
+  match course-wide publications; unassigned publications match nothing. The overview has a course and an activity
+  filter (activities of the chosen course); the open link, the way back, reload and the tabs keep them. Unknown or
+  contradictory courses and activities fail closed: the filter states the error and nothing is listed or counted -
+  never the unfiltered report. On the connection page the publications of the grade prerequisites, the ad hoc task
+  finding, rows, totals, counters, selection, journal, completion and both exports (report and support package) use the
+  same scope; site-wide settings are marked as global. A connection opened with a course it is not used in says so and
+  shows empty scoped views.
+* **#30 Header and edit pencils.** The header holds the way back, the readable name with its local ids and exactly one
+  edit pencil (registration or tool type). The core link buttons are gone. The standard Moodle pencil (`i/edit`, with
+  the localised accessible name "Edit ... <name>") stands in the row of what it edits: the connection in the overview,
+  each publication in "Used in" and in the grade prerequisites, courses and activities wherever they are named. Targets
+  need the core capability (`moodle/site:config`, `enrol/lti:config`, `moodle/course:update`,
+  `moodle/course:manageactivities`). Courses, activities and publications are shown by name with the id behind it,
+  "Name (id: 12)"; deleted ones are named as missing. Names and course contexts are loaded in bulk.
+* **#31 Pagination.** The core paging bar (`$OUTPUT->paging_bar`, first/previous/numbers/next/last) above and below the
+  grade rows, the journal, the evidence, the timeline, the completion rows, the support list and the audit log; no bar
+  for a single page. Independent page parameters (`gpage`, `jpage`, `epage`, `tpage`, `cpage`, `hpage`, `spage`,
+  `apage`); page sizes 20/50/100/500 (default 50); a changed filter or size returns to page 1; tampered page numbers are
+  clamped to the last page. The journal is numbered over a snapshot (`jmax`, newest first by time and id): new attempts
+  neither shift a page nor appear twice, the page says when newer entries exist; deep pages are read from the nearer
+  end. "Entries X-Y of Z" above the journal.
+* **#32 Compact toolbars and multi-select.** Every filter is one row of small labelled selects (wrapping only on narrow
+  screens): grade sync, source grade, transfer, booking (with the count per value), learner search, page size; the
+  journal has origin, transfer state, attribution, a person or resource link search and its own page size. The three
+  counter tables are folded under one summary line. Row checkboxes and "select all shown" exist for users with
+  `runchecks` or the replay right, independent of the replay opt-in. The action is chosen with the selection: the
+  read-only AGS result check (targets listed, then one confirmation, nothing is written) or the replay (preview,
+  reason, confirmation as before). Selecting never sends anything.
+
 ## 0.5.0 - 2026-11-03 (alpha), version 2026110300
 
 Issues #10 to #28 (UX user stories, test coverage, follow-up order of 2026-11-02). Upgrade step 2026110300 from 0.4.0

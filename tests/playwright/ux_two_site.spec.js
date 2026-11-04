@@ -144,6 +144,7 @@ test.describe('UX user stories 4.5 provider -> 5.2 consumer', () => {
 
   test.beforeAll(() => {
     stack(TOOLCFG, 'manylearners', '60');
+    stack(TOOLCFG, 'journalrows', '45');
     stack(TOOLCFG, 'viewer');
   });
 
@@ -163,9 +164,10 @@ test.describe('UX user stories 4.5 provider -> 5.2 consumer', () => {
       await expect(page.locator('#tool_ltidiagnostics_live')).toContainText('Updated:');
       expect(await page.evaluate(() => window.ltidiagMarker)).toBe('still-here');
       await expect(rows.locator('#tool_ltidiagnostics_grades_rows tbody tr')).toHaveCount(20);
-      // Next page through the pager.
-      await rows.getByRole('link', { name: /Next/ }).click();
-      await expect(page).toHaveURL(/offset=20/);
+      // Next page through the core paging bar (issue #31): one above and one below the table.
+      await expect(rows.locator('.ltidiag-pager[data-pagevar=gpage]')).toHaveCount(2);
+      await rows.locator('.ltidiag-pager').first().getByRole('link', { name: /Next/ }).click();
+      await expect(page).toHaveURL(/gpage=1/);
       expect(await page.evaluate(() => window.ltidiagMarker)).toBe('still-here');
       const second = await rows.locator('#tool_ltidiagnostics_rows_count').innerText();
       expect(second).toMatch(/^21 to 40 of/);
@@ -197,7 +199,7 @@ test.describe('UX user stories 4.5 provider -> 5.2 consumer', () => {
       const pairs = [];
       for (let i = 0; i < n; i++) {
         const value = await cells.nth(i).getAttribute('data-value');
-        const count = Number((await cells.nth(i).locator('td').last().innerText()).trim());
+        const count = Number((await cells.nth(i).locator('td').last().textContent()).trim());
         sum += count;
         pairs.push([value, count]);
       }
@@ -276,6 +278,8 @@ test.describe('UX user stories 4.5 provider -> 5.2 consumer', () => {
         await boxes.nth(i).focus();
         await page.keyboard.press('Space');
       }
+      // Selecting never sends anything; the action is chosen with the selection (issue #32).
+      await page.locator('select[name=bulkaction]').selectOption('replay');
       await page.getByRole('button', { name: 'Preview marked rows' }).click();
       const main = page.locator('[role=main]');
       await expect(main).toContainText('Preview of the bulk replay');
@@ -366,11 +370,121 @@ test.describe('UX user stories 4.5 provider -> 5.2 consumer', () => {
     await expect(page.locator('input[name=fsearch]')).toHaveCount(0);
   });
 
+  test('#29/#30 the course and activity filter of the overview show only connections used there, by name, with pencils',
+    async ({ page }) => {
+      const other = JSON.parse(stack(TOOLCFG, 'othercourse').trim().split('\n').pop());
+      await login(page, st.tool.url, ADMIN);
+      const index = `${st.tool.url}/admin/tool/ltidiagnostics/index.php`;
+      await page.goto(index);
+      const list = page.locator('#tool_ltidiagnostics_connections');
+      await expect(list).toContainText('Other platform E2E');
+      await expect(list).toContainText('Control consumer');
+      // One row, one pencil per thing: the registration in the name cell, the publication in "Used in".
+      const control = list.locator('tr', { hasText: 'Control consumer' }).first();
+      await expect(control.locator('th a.ltidiag-edit')).toHaveCount(1);
+      await expect(control.locator('td a.ltidiag-edit[aria-label^="Edit publication"]').first()).toBeVisible();
+      await expect(control).toContainText(/\(id: \d+\)/);
+      // Course filter: only the connections of that course.
+      const filter = page.locator('#tool_ltidiagnostics_overview_filter');
+      await filter.locator('select[name=courseid]').selectOption(String(other.courseid));
+      await filter.getByRole('button', { name: 'Filter' }).click();
+      await expect(page).toHaveURL(new RegExp(`courseid=${other.courseid}`));
+      await expect(list).toContainText('Other platform E2E');
+      await expect(list).not.toContainText('Control consumer');
+      await expect(list).not.toContainText('BUW consumer');
+      await filter.locator('select[name=courseid]').selectOption(String(st.tool.courseid));
+      await filter.getByRole('button', { name: 'Filter' }).click();
+      await expect(list).toContainText('Control consumer');
+      await expect(list).not.toContainText('Other platform E2E');
+      // Activity filter: the course-wide publication of the other course never matches an activity.
+      await filter.locator('select[name=cmid]').selectOption(String(st.tool.cmid));
+      await filter.getByRole('button', { name: 'Filter' }).click();
+      await expect(page).toHaveURL(new RegExp(`cmid=${st.tool.cmid}`));
+      await expect(list).toContainText('Control consumer');
+      await expect(list).not.toContainText('Other platform E2E');
+      // The open link and the way back keep the filter; reload keeps it; reset removes it.
+      await control.getByRole('link', { name: /^Open/ }).click();
+      await expect(page).toHaveURL(new RegExp(`cmid=${st.tool.cmid}`));
+      await expect(page.locator('[data-chip=cm]')).toBeVisible();
+      await expect(page.locator('#tool_ltidiagnostics_connheading a.ltidiag-edit')).toHaveCount(1);
+      await expect(page.locator('#region-main')).not.toContainText('Edit deployments');
+      await page.locator('#tool_ltidiagnostics_backtooverview').click();
+      await expect(page).toHaveURL(new RegExp(`cmid=${st.tool.cmid}`));
+      await page.reload();
+      await expect(list).not.toContainText('Other platform E2E');
+      await page.locator('#tool_ltidiagnostics_overview_reset').click();
+      await expect(list).toContainText('Other platform E2E');
+      // Fail closed: an unknown course lists nothing.
+      await page.goto(`${index}?courseid=999999`);
+      await expect(page.locator('#tool_ltidiagnostics_connections')).toHaveCount(0);
+      await expect(page.locator('#tool_ltidiagnostics_noconnections')).toBeVisible();
+      // A connection opened with a course it is not used in shows empty scoped views.
+      await page.goto(tabUrl(st, 'control', 'grades', `&courseid=${other.courseid}`));
+      await expect(page.locator('#region-main')).toContainText('no proven use in the selected course or activity');
+      expect(await rowsTotal(page)).toBe(0);
+      await expect(page.locator('#tool_ltidiagnostics_grades_prereq')).toContainText('no published resource in the selected');
+      const exportlink = page.locator('a[href*="export.php"]').first();
+      await expect(exportlink).toHaveAttribute('href', new RegExp(`courseid=${other.courseid}`));
+      const pkg = page.locator('#tool_ltidiagnostics_pkg_json');
+      await expect(pkg).toHaveAttribute('href', new RegExp(`courseid=${other.courseid}`));
+    });
+
+  test('#31/#32 compact toolbars, folded counters, row checkboxes and a journal with its own paging bar', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await login(page, st.tool.url, ADMIN);
+    await page.goto(tabUrl(st, 'control', 'grades', '&jperpage=20'));
+    const rows = page.locator('#tool_ltidiagnostics_section_grades_rows');
+    // One row of selects: every select of the rows toolbar starts on the same line at desktop width.
+    // One row: every select, input and button of both toolbars ends on the same line at the default desktop width.
+    for (const id of ['grades_rows', 'grades_journal']) {
+      const bottoms = await page.locator(`#tool_ltidiagnostics_section_${id} form.ltidiag-filter`)
+        .locator('select, input:not([type=hidden]), button').evaluateAll((els) =>
+          els.map((e) => Math.round(e.getBoundingClientRect().bottom)));
+      expect(bottoms.length).toBeGreaterThanOrEqual(5);
+      expect(Math.max(...bottoms) - Math.min(...bottoms), `${id} toolbar: ${bottoms}`).toBeLessThan(12);
+    }
+    // The three counter tables are folded away under one summary line.
+    const details = page.locator('#tool_ltidiagnostics_counters_details');
+    await expect(details).toHaveCount(1);
+    await expect(details).not.toHaveAttribute('open', '');
+    await expect(page.locator('#tool_ltidiagnostics_cnt_grade')).toBeHidden();
+    await details.locator('summary').click();
+    await expect(page.locator('#tool_ltidiagnostics_cnt_grade')).toBeVisible();
+    // Checkboxes and "select all shown" select exactly the shown page.
+    const shown = await rows.locator('#tool_ltidiagnostics_grades_rows tbody tr').count();
+    await page.locator('#ltidiag-pair-all').check();
+    await expect(page.locator('input.ltidiag-pair:checked')).toHaveCount(shown);
+    await page.locator('#ltidiag-pair-all').uncheck();
+    // The journal: compact toolbar, "X–Y of Z", core paging bar above and below, own page parameter.
+    const journal = page.locator('#tool_ltidiagnostics_section_grades_journal');
+    await expect(journal.locator('select[name=jorigin]')).toHaveCount(1);
+    await expect(journal.locator('input[name=jsearch]')).toHaveCount(1);
+    const count = journal.locator('#tool_ltidiagnostics_journal_count');
+    const total = Number(await count.getAttribute('data-total'));
+    expect(total, 'the journal has several pages').toBeGreaterThan(40);
+    {
+      await expect(journal.locator('.ltidiag-pager[data-pagevar=jpage]')).toHaveCount(2);
+      await expect(count).toContainText(/Entries 1–20 of/);
+      await journal.locator('.ltidiag-pager').last().getByRole('link', { name: /Next/ }).click();
+      await expect(page).toHaveURL(/jpage=1/);
+      await expect(count).toContainText(/Entries 21–/);
+      // The other block keeps its page.
+      expect(page.url()).not.toMatch(/gpage=/);
+      await page.goBack();
+      await expect(count).toContainText(/Entries 1–20 of/);
+    }
+    // A tampered page number shows the last page, never an empty one.
+    await page.goto(tabUrl(st, 'control', 'grades', '&perpage=20&gpage=99999'));
+    await expect(page.locator('#tool_ltidiagnostics_grades_rows tbody tr').first()).toBeVisible();
+  });
+
   test('#11/#28 accessibility and screenshots of every view in English and German', async ({ page }) => {
     test.setTimeout(900000);
     await login(page, st.tool.url, ADMIN);
     const views = [
       ['overview', `${st.tool.url}/admin/tool/ltidiagnostics/index.php`],
+      ['overview_course', `${st.tool.url}/admin/tool/ltidiagnostics/index.php?courseid=${st.tool.courseid}`],
+      ['control_grades', tabUrl(st, 'control', 'grades', '&perpage=20&jperpage=20')],
       ['support', `${st.tool.url}/admin/tool/ltidiagnostics/support.php`],
       ['audit', `${st.tool.url}/admin/tool/ltidiagnostics/audit.php`],
     ];

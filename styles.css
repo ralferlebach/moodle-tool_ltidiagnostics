@@ -7,3 +7,45 @@
 .path-admin-tool-ltidiagnostics [data-ltidiag-section][aria-busy="true"] {
     opacity: .6;
 }
+
+/* Compact filter and selection toolbars (issue #32): one row of small labelled controls, wrapping on narrow screens. */
+.path-admin-tool-ltidiagnostics .ltidiag-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: .5rem;
+}
+
+.path-admin-tool-ltidiagnostics .ltidiag-toolbar .ltidiag-field {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.path-admin-tool-ltidiagnostics .ltidiag-toolbar .ltidiag-buttons {
+    flex-direction: row;
+    align-items: center;
+}
+
+.path-admin-tool-ltidiagnostics .ltidiag-toolbar select,
+.path-admin-tool-ltidiagnostics .ltidiag-toolbar input[type="search"] {
+    width: 9.5rem;
+    max-width: 100%;
+}
+
+/* The action of a selection names what it does; it keeps its natural width. */
+.path-admin-tool-ltidiagnostics .ltidiag-toolbar select#ltidiag-selaction {
+    width: auto;
+}
+
+.path-admin-tool-ltidiagnostics .ltidiag-toolbar select[name$="perpage"] {
+    width: 5.5rem;
+}
+
+.path-admin-tool-ltidiagnostics .ltidiag-toolbar input[type="date"] {
+    width: 9.5rem;
+}
+
+.path-admin-tool-ltidiagnostics .ltidiag-pager .pagination {
+    margin-bottom: .5rem;
+}

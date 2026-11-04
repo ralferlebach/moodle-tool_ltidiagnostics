@@ -88,7 +88,8 @@ class grade_diagnosis {
      *
      * @param connection $conn Connection (tool role with a deployment).
      * @param array $options offset, limit, resourcelinkrowid, userid, reveal (bool: identifiers in clear),
-     *     showscores (bool: score values; else only none/null/zero/value), now (int), importtasklog (bool, default true).
+     *     showscores (bool: score values; else only none/null/zero/value), now (int), importtasklog (bool, default true),
+     *     courseid, cmid (scope), invalidscope (bool: the scope is invalid, nothing matches; issue #29).
      * @return array See the class comment; keys connkey, generated, applicable, prerequisites, resources, links, rows,
      *     total, offset, limit, summary, findings.
      */
@@ -110,6 +111,8 @@ class grade_diagnosis {
             'tasklog' => null,
             'counters' => pair_query::empty_counters(),
             'scopelinks' => [],
+            'scopetools' => [],
+            'scoped' => false,
             'filters' => pair_query::clean([]),
         ];
         if (!$out['applicable']) {
@@ -141,13 +144,19 @@ class grade_diagnosis {
             'linkid' => (int) ($options['resourcelinkrowid'] ?? 0),
             'userid' => (int) ($options['userid'] ?? 0),
         ]);
+        // Published resources inside the scope (issue #29): the publication list, the findings and the population use only
+        // these. An invalid scope (unknown or contradictory course or activity, invalid period) matches nothing.
+        $invalid = !empty($options['invalidscope']);
+        $scopetools = $invalid ? [] : self::tools_in_scope($resources, $courseid, $cmid, $filters);
         $inscope = [];
         foreach ($links as $id => $link) {
-            if (in_array($link['toolid'], self::tools_in_scope($resources, $courseid, $cmid, $filters), true)) {
+            if (in_array($link['toolid'], $scopetools, true)) {
                 $inscope[$id] = $link;
             }
         }
         $out['scopelinks'] = array_keys($inscope);
+        $out['scopetools'] = $scopetools;
+        $out['scoped'] = $invalid || $courseid > 0 || $cmid > 0;
         $out['filters'] = $filters;
         $items = [];
         foreach ($resources as $toolid => $res) {
@@ -156,7 +165,7 @@ class grade_diagnosis {
         $page = pair_query::page(
             $conn->key,
             (int) $conn->deploymentrowid,
-            self::tools_in_scope($resources, $courseid, $cmid, $filters),
+            $scopetools,
             $items,
             $filters,
             $offset,
@@ -227,6 +236,10 @@ class grade_diagnosis {
      */
     public function scope_toolids(connection $conn, \tool_ltidiagnostics\local\scope $scope): ?array {
         global $DB;
+        if ($scope->invalid) {
+            // Fail closed (issue #29): an invalid scope matches no publication.
+            return [];
+        }
         if (!$scope->courseid && !$scope->cmid) {
             return null;
         }
@@ -271,7 +284,8 @@ class grade_diagnosis {
         }
         $filters = pair_query::clean($filters);
         $items = array_map(fn($r) => (int) $r['itemid'], $resources);
-        $tools = self::tools_in_scope($resources, $scope->courseid, $scope->cmid, $filters);
+        // An invalid scope (also an invalid period alone) matches nothing (issue #29, fail closed).
+        $tools = $scope->invalid ? [] : self::tools_in_scope($resources, $scope->courseid, $scope->cmid, $filters);
         return pair_query::all($conn->key, (int) $conn->deploymentrowid, $tools, $items, $filters, $max);
     }
 
@@ -820,7 +834,9 @@ class grade_diagnosis {
             'limit_prediction',
             'provider'
         );
-        $failedadhoc = array_sum(array_column($p['adhoc'], 'failed'));
+        // Ad hoc tasks per published resource: only those of the scope count (issue #29).
+        $adhoc = !empty($out['scoped']) ? array_intersect_key($p['adhoc'], array_flip($out['scopetools'])) : $p['adhoc'];
+        $failedadhoc = array_sum(array_column($adhoc, 'failed'));
         $add('gr_adhoc_failing', 'warning', $failedadhoc, 'task_adhoc', 'certain', 'limit_prediction', 'provider');
         $add('gr_tasklog_off', 'warning', (int) ($p['tasklogmode'] === 0), 'config', 'certain', 'limit_tasklog', 'provider');
         $risks = [];

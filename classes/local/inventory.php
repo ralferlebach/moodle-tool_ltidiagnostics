@@ -33,10 +33,11 @@ class inventory {
      *
      * @param string $role Restrict to a role ("" = both).
      * @param string $search Case-insensitive search term over name, issuer, client id and deployment id.
-     * @param int $courseid Restrict platform connections to tools visible in a course (0 = no restriction).
+     * @param int $courseid Only connections with a proven use in this course (0 = no restriction).
+     * @param int $cmid Only connections with a proven use in this activity (0 = no restriction).
      * @return connection[] Keyed by connection key.
      */
-    public function get_connections(string $role = '', string $search = '', int $courseid = 0): array {
+    public function get_connections(string $role = '', string $search = '', int $courseid = 0, int $cmid = 0): array {
         $list = [];
         if ($role === '' || $role === connection::ROLE_PLATFORM) {
             foreach ($this->platform_connections() as $c) {
@@ -48,8 +49,8 @@ class inventory {
                 $list[$c->key] = $c;
             }
         }
-        if ($courseid > 0) {
-            $list = $this->filter_by_course($list, $courseid);
+        if ($courseid > 0 || $cmid > 0) {
+            $list = self::filter_by_scope($list, $courseid, $cmid);
         }
         $search = \core_text::strtolower(trim($search));
         if ($search !== '') {
@@ -77,19 +78,34 @@ class inventory {
     }
 
     /**
-     * Keep platform tools usable in a course, and all tool-role connections.
+     * Keep the connections with a proven use in the course and/or activity (issue #29). The role of a connection or a
+     * site-wide tool type never counts as a match on its own; an activity filter does not match course-level
+     * publications.
      *
      * @param connection[] $list Connections.
-     * @param int $courseid Course id.
+     * @param int $courseid Course id (0: any).
+     * @param int $cmid Course module id (0: any).
      * @return connection[]
      */
-    private function filter_by_course(array $list, int $courseid): array {
-        return array_filter($list, function (connection $c) use ($courseid) {
-            if ($c->role === connection::ROLE_TOOL) {
+    public static function filter_by_scope(array $list, int $courseid, int $cmid): array {
+        return array_filter($list, fn(connection $c) => self::in_scope($c, $courseid, $cmid));
+    }
+
+    /**
+     * True when the connection has a proven use in the course and/or activity.
+     *
+     * @param connection $c Connection.
+     * @param int $courseid Course id (0: any).
+     * @param int $cmid Course module id (0: any).
+     * @return bool
+     */
+    public static function in_scope(connection $c, int $courseid, int $cmid): bool {
+        foreach ($c->usage as $u) {
+            if (($courseid <= 0 || $u['courseid'] === $courseid) && ($cmid <= 0 || $u['cmid'] === $cmid)) {
                 return true;
             }
-            return $c->courseid === 0 || $c->courseid === $courseid;
-        });
+        }
+        return false;
     }
 
     /**
@@ -105,6 +121,7 @@ class inventory {
         require_once($CFG->dirroot . '/mod/lti/locallib.php');
         $out = [];
         $states = [1 => 'active', 2 => 'pending', 3 => 'rejected'];
+        $activities = $this->lti_activities();
         foreach ($DB->get_records('lti_types', null, 'id') as $type) {
             $config = lti_get_type_config($type->id);
             $c = new connection();
@@ -117,6 +134,10 @@ class inventory {
             $c->clientid = (string) ($type->clientid ?? '');
             $c->deploymentid = (string) $type->id;
             $c->courseid = (int) $type->course === (int) SITEID ? 0 : (int) $type->course;
+            $c->usage = $activities[(int) $type->id] ?? [];
+            if ($c->courseid) {
+                $c->usage[] = ['kind' => 'course_type', 'courseid' => $c->courseid, 'cmid' => 0, 'toolid' => 0, 'enrolid' => 0];
+            }
             $c->state = $states[(int) $type->state] ?? 'unknown';
             $c->endpoints = array_filter([
                 'launch' => (string) $type->baseurl,
@@ -139,6 +160,31 @@ class inventory {
             ];
             $out[] = $c;
         }
+        return $out;
+    }
+
+    /**
+     * External tool activities per tool type (one query).
+     *
+     * @return array[] Type id => usage entries.
+     */
+    private function lti_activities(): array {
+        global $DB;
+        $out = [];
+        $module = $DB->get_field('modules', 'id', ['name' => 'lti']);
+        if (!$module) {
+            return $out;
+        }
+        $rs = $DB->get_recordset_sql("SELECT cm.id, cm.course, l.typeid
+                                        FROM {course_modules} cm
+                                        JOIN {lti} l ON l.id = cm.instance
+                                       WHERE cm.module = :module AND l.typeid > 0 AND cm.deletioninprogress = 0
+                                    ORDER BY cm.id", ['module' => $module]);
+        foreach ($rs as $r) {
+            $out[(int) $r->typeid][] = ['kind' => 'activity', 'courseid' => (int) $r->course, 'cmid' => (int) $r->id,
+                'toolid' => 0, 'enrolid' => 0];
+        }
+        $rs->close();
         return $out;
     }
 
@@ -195,9 +241,12 @@ class inventory {
                 ]);
                 $linked = $dep ? ($links[(int) $dep->id] ?? []) : [];
                 $c->tools = [];
+                $c->usage = [];
                 foreach ($linked as $toolid) {
                     if (isset($tools[$toolid])) {
                         $c->tools[$toolid] = $tools[$toolid];
+                        $c->usage[] = ['kind' => 'publication', 'courseid' => $tools[$toolid]['courseid'],
+                            'cmid' => $tools[$toolid]['cmid'], 'toolid' => $toolid, 'enrolid' => $tools[$toolid]['enrolid']];
                     }
                 }
                 $c->facts = [
@@ -220,16 +269,20 @@ class inventory {
         global $DB;
         $sql = "SELECT t.id, t.gradesync, t.gradesynccompletion, t.membersync, t.membersyncmode,
                        t.provisioningmodelearner, t.provisioningmodeinstructor, t.ltiversion, t.enrolid,
-                       e.status AS enrolstatus, e.courseid, e.name AS enrolname
+                       e.status AS enrolstatus, e.courseid, e.name AS enrolname, ctx.contextlevel, ctx.instanceid
                   FROM {enrol_lti_tools} t
                   JOIN {enrol} e ON e.id = t.enrolid
+             LEFT JOIN {context} ctx ON ctx.id = t.contextid
               ORDER BY t.id";
         $out = [];
         foreach ($DB->get_records_sql($sql) as $t) {
             $out[(int) $t->id] = [
                 'id' => (int) $t->id,
                 'courseid' => (int) $t->courseid,
-                'name' => $t->enrolname !== null && $t->enrolname !== '' ? (string) $t->enrolname : ('#' . $t->id),
+                // A publication of an activity has a module context; a course publication has the course context.
+                'cmid' => (int) $t->contextlevel === CONTEXT_MODULE ? (int) $t->instanceid : 0,
+                'enrolid' => (int) $t->enrolid,
+                'name' => (string) ($t->enrolname ?? ''),
                 'enabled' => (int) ((int) $t->enrolstatus === ENROL_INSTANCE_ENABLED),
                 'gradesync' => (int) $t->gradesync,
                 'membersync' => (int) $t->membersync,

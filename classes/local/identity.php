@@ -112,13 +112,13 @@ class identity {
     }
 
     /**
-     * Course name with its id and links (view; edit when allowed).
+     * Course name with its id, linked to the course, and the edit pencil when allowed (issue #30).
      *
      * @param int $courseid Course.
      * @return string HTML ('' for 0).
      */
     public static function course_html(int $courseid): string {
-        global $DB, $USER;
+        global $USER;
         if (!$courseid) {
             return '';
         }
@@ -126,34 +126,30 @@ class identity {
         if (isset(self::$html[$cachekey])) {
             return self::$html[$cachekey];
         }
-        $c = $DB->get_record('course', ['id' => $courseid], 'id, fullname');
-        if (!$c) {
-            return s(get_string('id_coursemissing', 'tool_ltidiagnostics', $courseid));
+        $text = names::course($courseid);
+        $ctx = \context_course::instance($courseid, IGNORE_MISSING);
+        if (!$ctx) {
+            return self::$html[$cachekey] = $text;
         }
-        $ctx = \context_course::instance($courseid);
-        $out = \html_writer::link(new moodle_url('/course/view.php', ['id' => $courseid]), format_string(
-            $c->fullname,
-            true,
-            ['context' => $ctx]
-        )) . ' ' . s(get_string('id_idsuffix', 'tool_ltidiagnostics', $courseid));
+        $out = \html_writer::link(new moodle_url('/course/view.php', ['id' => $courseid]), $text);
         if (has_capability('moodle/course:update', $ctx)) {
-            $out .= ' ' . \html_writer::link(
-                new moodle_url('/course/edit.php', ['id' => $courseid]),
-                get_string('id_editcourse', 'tool_ltidiagnostics'),
-                ['class' => 'small']
-            );
+            $out .= navigation::pencil(new moodle_url('/course/edit.php', ['id' => $courseid]), get_string(
+                'id_editcourse_of',
+                'tool_ltidiagnostics',
+                names::plain($text)
+            ));
         }
-        self::$html[$cachekey] = $out;
-        return $out;
+        return self::$html[$cachekey] = $out;
     }
 
     /**
-     * Activity name with its cmid and links (view; edit settings when allowed).
+     * Activity name with its id, linked to the activity, and the edit pencil when allowed (issue #30).
      *
      * @param int $cmid Course module.
+     * @param int $courseid Its course (0: look it up).
      * @return string HTML ('' for 0).
      */
-    public static function cm_html(int $cmid): string {
+    public static function cm_html(int $cmid, int $courseid = 0): string {
         global $DB, $USER;
         if (!$cmid) {
             return '';
@@ -162,26 +158,25 @@ class identity {
         if (isset(self::$html[$cachekey])) {
             return self::$html[$cachekey];
         }
-        $courseid = (int) $DB->get_field('course_modules', 'course', ['id' => $cmid]);
-        if (!$courseid) {
-            return s(get_string('id_cmmissing', 'tool_ltidiagnostics', $cmid));
-        }
+        $courseid = $courseid ?: (int) $DB->get_field('course_modules', 'course', ['id' => $cmid]);
+        $text = names::cm($cmid, $courseid);
         try {
-            $cm = get_fast_modinfo($courseid)->get_cm($cmid);
+            $cm = $courseid ? get_fast_modinfo($courseid)->get_cm($cmid) : null;
         } catch (\moodle_exception $e) {
-            return s(get_string('id_cmmissing', 'tool_ltidiagnostics', $cmid));
+            $cm = null;
         }
-        $out = ($cm->url ? \html_writer::link($cm->url, $cm->get_formatted_name()) : s($cm->get_formatted_name()))
-            . ' ' . s(get_string('id_cmidsuffix', 'tool_ltidiagnostics', $cmid));
+        if (!$cm) {
+            return self::$html[$cachekey] = $text;
+        }
+        $out = $cm->url ? \html_writer::link($cm->url, $text) : $text;
         if (has_capability('moodle/course:manageactivities', $cm->context)) {
-            $out .= ' ' . \html_writer::link(
-                new moodle_url('/course/modedit.php', ['update' => $cmid]),
-                get_string('id_editcm', 'tool_ltidiagnostics'),
-                ['class' => 'small']
-            );
+            $out .= navigation::pencil(new moodle_url('/course/modedit.php', ['update' => $cmid]), get_string(
+                'id_editcm_of',
+                'tool_ltidiagnostics',
+                names::plain($text)
+            ));
         }
-        self::$html[$cachekey] = $out;
-        return $out;
+        return self::$html[$cachekey] = $out;
     }
 
     /**
@@ -190,5 +185,6 @@ class identity {
     public static function reset(): void {
         self::$users = [];
         self::$html = [];
+        names::reset();
     }
 }

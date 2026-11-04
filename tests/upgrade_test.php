@@ -99,20 +99,20 @@ final class upgrade_test extends \advanced_testcase {
     }
 
     /**
-     * Release metadata says 0.5.0 and the Moodle version is newer than the 0.1.0 build.
+     * Release metadata says 0.6.0 and the Moodle version is newer than the 0.1.0 build.
      */
     public function test_version_metadata(): void {
         global $CFG;
         $plugin = new \stdClass();
         require($CFG->dirroot . '/admin/tool/ltidiagnostics/version.php');
-        $this->assertSame('0.5.0', $plugin->release);
+        $this->assertSame('0.6.0', $plugin->release);
         $this->assertSame('tool_ltidiagnostics', $plugin->component);
         $this->assertGreaterThan(self::V010, $plugin->version);
-        $this->assertSame(2026110300, $plugin->version);
+        $this->assertSame(2026110301, $plugin->version);
         $this->assertSame(MATURITY_ALPHA, $plugin->maturity);
         $this->assertSame([405, 503], $plugin->supported);
         $info = \core_plugin_manager::instance()->get_plugin_info('tool_ltidiagnostics');
-        $this->assertSame('0.5.0', $info->release);
+        $this->assertSame('0.6.0', $info->release);
     }
 
     /**

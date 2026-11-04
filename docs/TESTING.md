@@ -62,6 +62,17 @@ unless the schema changes (a bump triggers a slow PHPUnit re-initialisation).
 NODE_PATH=<dir with @playwright/test> npx playwright test -c playwright.channels.config.js
 ```
 
+### Added in 0.6.0 (issues #29 to #32)
+
+| Layer | Where | What it proves |
+|-------|-------|----------------|
+| Scope isolation | `tests/local/scope_isolation_test.php` (7) | three courses with two activities each, two registrations (one with two deployments), site-wide, course-bound and unused tool types, course-wide and activity publications, a shared and an unassigned publication: course filter = connections used in the course or its activities, activity filter excludes course-wide publications, fail closed on unknown or contradictory scopes, grade channel publications/population/journal scope, names with ids (formatted, missing), overview filter options and "Used in", query budget with 15 more courses |
+| Edit targets | `tests/navigation_identity_test.php::test_labels_and_edit_targets` | registration, tool type and publication targets with their ids, only with the core capability, none for a missing course, pencil label escaped once |
+| Pagination | `tests/output/pagination_test.php` (11) | paging bar for 0, 1, 50, 51, 500, 501, 100 000 rows; clamped and tampered page numbers; page sizes; independent page parameters; journal pages over a snapshot (newer rows neither shift nor duplicate, "newer" flag, far-end reads in order); journal range and two bars |
+| Grade output | `tests/local/grades/channels_output_test.php` (+2) | checkboxes and the read-only result check by right without the opt-in, no checkbox without a right, folded counters; grade tab of a foreign course empty with the global note, own course with the named publication and its pencil |
+| Behat | `tests/behat/ux.feature` (+5) | overview course filter with names and pencils, unknown course, grade tab of a foreign course, read-only bulk result check, journal paging |
+| Playwright two-site | `tests/playwright/ux_two_site.spec.js` (+2) | overview course and activity filter with open link/back/reload/reset, unknown course, foreign course on a connection; toolbars end on one line at 1280 px, folded counters, select all shown, journal paging with history |
+
 ### Added in 0.5.0 (issues #10 to #28)
 
 The mapping of every user story to its fixture and tests is `docs/STORY_MATRIX.md`.
@@ -69,7 +80,7 @@ The mapping of every user story to its fixture and tests is `docs/STORY_MATRIX.m
 | Layer | Where | What it proves |
 |-------|-------|----------------|
 | Count invariants | `tests/local/grades/pair_query_test.php` (4) | every counter equals the total of its filter, dimensions disjoint and complete, NULL/0/lastgrade skip/2xx without booking/401, two consumers, paging = every match, empty course, unknown filter values dropped |
-| Menu, navigation, identities, scope | `tests/navigation_identity_test.php` (9) | admin tree per single capability (category once, own page only, no settings), none without capability, admin under *Admin tools*; labels with ids, core edit links by capability, back link with filters; names only with `viewidentities`, unknown users, formatted course names, edit link by capability; scope validation in the user's time zone |
+| Menu, navigation, identities, scope | `tests/navigation_identity_test.php` (9) | admin tree per single capability (category once, own page only, no settings), none without capability, admin under *Admin tools*; labels with ids, edit targets by capability, back link with filters; names only with `viewidentities`, unknown users, formatted course names, edit link by capability; scope validation in the user's time zone |
 | Sections and evidence | `tests/sections_evidence_test.php` (3) | external function = page rendering, audit of the view, rights, unknown section/connection, foreign parameters ignored; evidence filters service/text/attribution/course/paging; task runs never silently scoped; page sizes |
 | Render smoke | `tests/output/render_smoke_test.php` (2: en, de) | every view part with data, with and without scope and snapshots, without debugging (missing strings), placeholders, empty badges, nested forms, unlabelled controls |
 | i18n scan | `tests/lang_test.php::test_i18n_scan_of_output_code`, `test_machine_identifiers_unchanged`, extended `test_literal_string_ids_exist` | token scan of pages, renderers and forms with a reviewed exception list; templates without literal text; `$t()`/`self::t()` ids exist in en and de |

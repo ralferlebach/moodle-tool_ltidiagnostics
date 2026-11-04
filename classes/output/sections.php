@@ -41,10 +41,10 @@ class sections {
 
     /** @var string[][] URL parameters owned by each section (the browser history keeps those of the other sections). */
     public const PARAMS = [
-        'grades_rows' => ['fgradesync', 'fgrade', 'ftransfer', 'fbooking', 'fuser', 'flink', 'fsearch', 'perpage', 'offset'],
-        'grades_journal' => ['jorigin', 'jtransfer', 'jattr', 'jlink', 'juser', 'jperpage', 'jbefore'],
-        'evidence' => ['view', 'service', 'text', 'assign', 'eperpage', 'eoffset'],
-        'timeline' => ['service', 'text', 'tperpage', 'toffset'],
+        'grades_rows' => ['fgradesync', 'fgrade', 'ftransfer', 'fbooking', 'fuser', 'flink', 'fsearch', 'perpage', 'gpage'],
+        'grades_journal' => ['jorigin', 'jtransfer', 'jattr', 'jsearch', 'jlink', 'juser', 'jperpage', 'jpage', 'jmax'],
+        'evidence' => ['view', 'service', 'text', 'assign', 'eperpage', 'epage'],
+        'timeline' => ['service', 'text', 'tperpage', 'tpage'],
     ];
 
     /** @var string[] Sections and the tab they belong to. */
@@ -54,6 +54,20 @@ class sections {
         'evidence' => 'evidence',
         'timeline' => 'timeline',
     ];
+
+    /**
+     * Page index inside the population (0-based), clamped to the last page so that a tampered or outdated page number
+     * never shows an empty page of a non-empty population.
+     *
+     * @param int $page Requested page.
+     * @param int $perpage Page size.
+     * @param int $total Population.
+     * @return int
+     */
+    public static function clamp_page(int $page, int $perpage, int $total): int {
+        $last = $total > 0 ? intdiv($total - 1, max(1, $perpage)) : 0;
+        return max(0, min($page, $last));
+    }
 
     /**
      * Allowed page size.
@@ -125,8 +139,21 @@ class sections {
         if ($tab === null) {
             throw new \invalid_parameter_exception('section');
         }
+        // The links and forms of a section keep the state of the other sections of the same tab, so that paging one
+        // block without JavaScript does not reset the other (issue #31). Those values are only passed on, as text.
+        $others = [];
+        foreach (self::SECTIONS as $other => $othertab) {
+            if ($othertab !== $tab || $other === $section) {
+                continue;
+            }
+            foreach (self::PARAMS[$other] as $name) {
+                if (isset($q[$name]) && is_scalar($q[$name]) && (string) $q[$name] !== '') {
+                    $others[$name] = \core_text::substr(clean_param((string) $q[$name], PARAM_TEXT), 0, 100);
+                }
+            }
+        }
         $base = new moodle_url('/admin/tool/ltidiagnostics/connection.php', ['key' => $conn->key, 'tab' => $tab] +
-            $scope->params());
+            $scope->params() + $others);
         switch ($section) {
             case 'grades_rows':
                 return self::grades_rows($conn, $q, $scope, $base, $PAGE->get_renderer('tool_ltidiagnostics', 'grades'));
@@ -179,19 +206,26 @@ class sections {
         ];
         $filters = \tool_ltidiagnostics\local\grades\pair_query::clean($filters);
         $perpage = self::size((int) self::param($q, 'perpage', 50, PARAM_INT));
-        $offset = max(0, (int) self::param($q, 'offset', 0, PARAM_INT));
-        $d = (new \tool_ltidiagnostics\local\grades\grade_diagnosis())->run($conn, [
-            'offset' => $offset, 'limit' => $perpage, 'showscores' => $ctx['showscores'], 'filters' => $filters,
-            'courseid' => $scope->courseid, 'cmid' => $scope->cmid, 'importtasklog' => false,
-        ]);
+        $page = max(0, (int) self::param($q, 'gpage', 0, PARAM_INT));
+        $diag = new \tool_ltidiagnostics\local\grades\grade_diagnosis();
+        $options = ['limit' => $perpage, 'showscores' => $ctx['showscores'], 'filters' => $filters,
+            'courseid' => $scope->courseid, 'cmid' => $scope->cmid, 'invalidscope' => $scope->invalid,
+            'importtasklog' => false];
+        $d = $diag->run($conn, $options + ['offset' => $page * $perpage]);
+        $clamped = self::clamp_page($page, $perpage, (int) $d['total']);
+        if ($clamped !== $page) {
+            $page = $clamped;
+            $d = $diag->run($conn, $options + ['offset' => $page * $perpage]);
+        }
+        $offset = $page * $perpage;
         $params = array_filter([
             'fgradesync' => $filters['gradesync'], 'fgrade' => $filters['grade'], 'ftransfer' => $filters['transfer'],
             'fbooking' => $filters['booking'], 'fuser' => $filters['userid'], 'flink' => $filters['linkid'],
             'fsearch' => $filters['usersearch'], 'perpage' => $perpage === 50 ? 0 : $perpage,
         ]);
-        $url = new moodle_url($base, $params + ($offset ? ['offset' => $offset] : []));
+        $url = new moodle_url($base, $params + ($page ? ['gpage' => $page] : []));
         $html = $out->rows_section($d, $ctx + ['baseurl' => $base, 'params' => $params, 'filters' => $filters,
-            'perpage' => $perpage, 'offset' => $offset, 'scope' => $scope]);
+            'perpage' => $perpage, 'offset' => $offset, 'page' => $page, 'scope' => $scope]);
         return ['html' => $html, 'url' => $url, 'total' => (int) $d['total']];
     }
 
@@ -226,24 +260,37 @@ class sections {
                 ? self::param($q, 'jattr', '', PARAM_ALPHA) : '',
             'jlink' => (int) self::param($q, 'jlink', 0, PARAM_INT),
             'juser' => (int) self::param($q, 'juser', 0, PARAM_INT),
+            'jsearch' => \core_text::substr(trim((string) self::param($q, 'jsearch', '', PARAM_TEXT)), 0, 100),
             'jperpage' => $perpage === 50 ? 0 : $perpage,
         ]);
-        $before = (int) self::param($q, 'jbefore', 0, PARAM_INT);
         $filters = [
             'origin' => $params['jorigin'] ?? '', 'transfer' => $params['jtransfer'] ?? '',
             'attribution' => $params['jattr'] ?? '', 'resourcelinkrowid' => $params['jlink'] ?? 0,
-            'userid' => $params['juser'] ?? 0, 'from' => $scope->from, 'to' => $scope->to, 'limit' => $perpage,
-            'before' => $before,
+            'userid' => $params['juser'] ?? 0, 'from' => $scope->from, 'to' => $scope->to,
         ];
+        // Search: a number is a resource link row; a text searches learners' names (only with the right to see them).
+        $search = $params['jsearch'] ?? '';
+        if ($search !== '' && ctype_digit($search)) {
+            $filters['resourcelinkrowid'] = (int) $search;
+        } else if ($search !== '' && $ctx['names']) {
+            $filters['usersearch'] = $search;
+        } else if ($search !== '') {
+            unset($params['jsearch']);
+        }
         $toolids = (new \tool_ltidiagnostics\local\grades\grade_diagnosis())->scope_toolids($conn, $scope);
         if ($toolids !== null) {
             $filters['toolids'] = $toolids;
         }
-        $page = \tool_ltidiagnostics\local\grades\journal::page($conn->key, $filters);
-        $url = new moodle_url($base, $params + ($before ? ['jbefore' => $before] : []));
-        $html = $out->journal_section($page, $ctx + ['baseurl' => $base, 'params' => $params, 'perpage' => $perpage,
-            'before' => $before, 'scope' => $scope]);
-        return ['html' => $html, 'url' => $url, 'total' => (int) $page['total']];
+        // Stable page numbers (issue #31): the pages are counted over the journal as it was when the first page was
+        // shown (jmax: newest row id then), so rows written while paging neither shift pages nor appear twice.
+        $max = (int) self::param($q, 'jmax', 0, PARAM_INT);
+        $page = max(0, (int) self::param($q, 'jpage', 0, PARAM_INT));
+        $result = \tool_ltidiagnostics\local\grades\journal::numbered_page($conn->key, $filters, $page, $perpage, $max);
+        $params['jmax'] = $result['max'];
+        $url = new moodle_url($base, $params + ($result['page'] ? ['jpage' => $result['page']] : []));
+        $html = $out->journal_section($result, $ctx + ['baseurl' => $base, 'params' => $params, 'perpage' => $perpage,
+            'page' => $result['page'], 'scope' => $scope]);
+        return ['html' => $html, 'url' => $url, 'total' => (int) $result['total']];
     }
 
     /**
@@ -273,14 +320,21 @@ class sections {
                 ? self::param($q, 'assign', '', PARAM_ALPHA) : '',
             'eperpage' => self::size((int) self::param($q, 'eperpage', 50, PARAM_INT)) === 50 ? 0
                 : self::size((int) self::param($q, 'eperpage', 50, PARAM_INT)),
-            'eoffset' => max(0, (int) self::param($q, 'eoffset', 0, PARAM_INT)),
         ]);
-        $page = (new \tool_ltidiagnostics\local\evidence_query())->page($conn, $scope, $view, [
-            'service' => $params['service'] ?? '', 'text' => $params['text'] ?? '', 'assign' => $params['assign'] ?? '',
-            'limit' => self::size((int) ($params['eperpage'] ?? 50)), 'offset' => (int) ($params['eoffset'] ?? 0),
-        ], time());
-        $url = new moodle_url($base, $params);
-        $html = $out->evidence_section($page, ['baseurl' => $base, 'params' => $params, 'view' => $view, 'key' => $conn->key]);
+        $perpage = self::size((int) ($params['eperpage'] ?? 50));
+        $pagenum = max(0, (int) self::param($q, 'epage', 0, PARAM_INT));
+        $query = new \tool_ltidiagnostics\local\evidence_query();
+        $filters = ['service' => $params['service'] ?? '', 'text' => $params['text'] ?? '', 'assign' => $params['assign'] ?? '',
+            'limit' => $perpage];
+        $page = $query->page($conn, $scope, $view, $filters + ['offset' => $pagenum * $perpage], time());
+        $clamped = self::clamp_page($pagenum, $perpage, (int) $page['total']);
+        if ($clamped !== $pagenum) {
+            $pagenum = $clamped;
+            $page = $query->page($conn, $scope, $view, $filters + ['offset' => $pagenum * $perpage], time());
+        }
+        $url = new moodle_url($base, $params + ($pagenum ? ['epage' => $pagenum] : []));
+        $html = $out->evidence_section($page, ['baseurl' => $base, 'params' => $params, 'view' => $view, 'key' => $conn->key,
+            'page' => $pagenum, 'perpage' => $perpage]);
         return ['html' => $html, 'url' => $url, 'total' => (int) $page['total']];
     }
 
@@ -304,16 +358,16 @@ class sections {
             'text' => \core_text::substr(trim((string) self::param($q, 'text', '', PARAM_TEXT)), 0, 100),
             'tperpage' => self::size((int) self::param($q, 'tperpage', 50, PARAM_INT)) === 50 ? 0
                 : self::size((int) self::param($q, 'tperpage', 50, PARAM_INT)),
-            'toffset' => max(0, (int) self::param($q, 'toffset', 0, PARAM_INT)),
         ]);
         $tl = (new \tool_ltidiagnostics\local\timeline())->build($conn, \context_system::instance(), $scope->filters(), time());
         $tl = \tool_ltidiagnostics\local\evidence_query::filter_timeline($tl, $params['service'] ?? '', $params['text'] ?? '');
         $limit = self::size((int) ($params['tperpage'] ?? 50));
-        $offset = (int) ($params['toffset'] ?? 0);
         $total = count($tl['items']);
-        $url = new moodle_url($base, $params);
+        $pagenum = self::clamp_page(max(0, (int) self::param($q, 'tpage', 0, PARAM_INT)), $limit, $total);
+        $offset = $pagenum * $limit;
+        $url = new moodle_url($base, $params + ($pagenum ? ['tpage' => $pagenum] : []));
         $html = $out->timeline_section($tl, ['baseurl' => $base, 'params' => $params, 'limit' => $limit, 'offset' => $offset,
-            'total' => $total]);
+            'page' => $pagenum, 'total' => $total]);
         return ['html' => $html, 'url' => $url, 'total' => $total];
     }
 }

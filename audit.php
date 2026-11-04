@@ -49,9 +49,9 @@ if (!isset(audit::GROUPS[$filters['agroup']])) {
     $filters['agroup'] = '';
 }
 $perpage = sections::size(optional_param('aperpage', 0, PARAM_INT));
-$offset = max(0, optional_param('aoffset', 0, PARAM_INT));
+$pagenum = max(0, optional_param('apage', 0, PARAM_INT));
 $base = array_filter($filters + ['aperpage' => $perpage === 50 ? 0 : $perpage]);
-$url = new moodle_url('/admin/tool/ltidiagnostics/audit.php', $base + array_filter(['aoffset' => $offset]));
+$url = new moodle_url('/admin/tool/ltidiagnostics/audit.php', $base + array_filter(['apage' => $pagenum]));
 admin_externalpage_setup('tool_ltidiagnostics_audit', '', null, $url);
 $context = context_system::instance();
 require_capability('tool/ltidiagnostics:viewprivacy', $context);
@@ -63,8 +63,15 @@ $period = scope::make(0, 0, trim($filters['afrom']), trim($filters['ato']));
 $errors = array_map(fn($e) => $t($e), $period->errors);
 $from = $period->from;
 $to = $period->to;
-$page = audit::page(['usersearch' => $filters['auser'], 'group' => $filters['agroup'], 'connkey' => $filters['connkey'],
-    'from' => $from, 'to' => $to], $offset, $perpage);
+$auditfilters = ['usersearch' => $filters['auser'], 'group' => $filters['agroup'], 'connkey' => $filters['connkey'],
+    'from' => $from, 'to' => $to];
+$page = audit::page($auditfilters, $pagenum * $perpage, $perpage);
+// A page number behind the last page (tampered or outdated) shows the last page (issue #31).
+$clamped = sections::clamp_page($pagenum, $perpage, (int) $page['total']);
+if ($clamped !== $pagenum) {
+    $pagenum = $clamped;
+    $page = audit::page($auditfilters, $pagenum * $perpage, $perpage);
+}
 
 $connections = [];
 foreach ((new inventory())->get_connections() as $c) {
@@ -108,14 +115,14 @@ $form = $field($t('audit_user'), 'id_auser', html_writer::empty_tag('input', ['t
         'agroup',
         $filters['agroup'],
         false,
-        ['id' => 'id_agroup', 'class' => 'custom-select form-select d-inline-block w-auto']
+        ['id' => 'id_agroup', 'class' => 'd-inline-block w-auto']
     ))
     . $field($t('connection'), 'id_connkey', html_writer::select(
         $conns,
         'connkey',
         $filters['connkey'],
         false,
-        ['id' => 'id_connkey', 'class' => 'custom-select form-select d-inline-block w-auto']
+        ['id' => 'id_connkey', 'class' => 'd-inline-block w-auto']
     ))
     . $field($t('scope_from'), 'id_afrom', html_writer::empty_tag('input', ['type' => 'date', 'name' => 'afrom',
         'id' => 'id_afrom', 'value' => $filters['afrom'], 'class' => 'form-control d-inline-block w-auto']))
@@ -126,7 +133,7 @@ $form = $field($t('audit_user'), 'id_auser', html_writer::empty_tag('input', ['t
         'aperpage',
         $perpage,
         false,
-        ['id' => 'id_aperpage', 'class' => 'custom-select form-select d-inline-block w-auto']
+        ['id' => 'id_aperpage', 'class' => 'd-inline-block w-auto']
     ))
     . html_writer::tag('button', $t('filter'), ['type' => 'submit', 'class' => 'btn btn-secondary mr-2 me-2 mb-2'])
     . html_writer::link(
@@ -142,6 +149,15 @@ echo html_writer::tag(
     ['id' => 'tool_ltidiagnostics_audit_count']
 );
 
+$pager = $grades->pager(
+    new moodle_url('/admin/tool/ltidiagnostics/audit.php'),
+    $base,
+    'apage',
+    $pagenum,
+    $perpage,
+    $page['total']
+);
+echo $pager;
 $table = new html_table();
 $table->id = 'tool_ltidiagnostics_audit';
 $table->attributes['class'] = 'generaltable table-sm';
@@ -172,5 +188,5 @@ foreach ($page['rows'] as $e) {
 }
 echo $table->data ? html_writer::div(html_writer::table($table), 'table-responsive')
     : html_writer::tag('p', $t('norows'), ['class' => 'alert alert-info']);
-echo $grades->offset_pager($url, $base, 'aoffset', $offset, $perpage, $page['total']);
+echo $pager;
 echo $output->footer();

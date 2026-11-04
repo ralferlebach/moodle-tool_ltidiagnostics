@@ -47,21 +47,29 @@ class support_package {
      *
      * @param connection $conn Connection.
      * @param int $now Now.
+     * @param \tool_ltidiagnostics\local\scope|null $scope Course, activity and period of the page (issue #29): the
+     *     package holds the same population; null or an empty scope is the whole connection.
      * @return array
      */
-    public static function build(connection $conn, int $now): array {
+    public static function build(connection $conn, int $now, ?\tool_ltidiagnostics\local\scope $scope = null): array {
+        $scope = $scope ?? \tool_ltidiagnostics\local\scope::make(0, 0);
         $pkg = [
             'schema' => self::SCHEMA,
             'diagnosticid' => support::diagnostic_id($conn->key),
             'role' => $conn->role,
             'generated' => gmdate('Y-m-d\TH:i:s\Z', $now),
+            'scope' => ['courseid' => (int) $scope->courseid, 'cmid' => (int) $scope->cmid,
+                'from' => $scope->from && $scope->from !== \tool_ltidiagnostics\local\scope::NEVER
+                    ? gmdate('Y-m-d\TH:i:s\Z', $scope->from) : '',
+                'to' => $scope->to ? gmdate('Y-m-d\TH:i:s\Z', $scope->to) : '', 'invalid' => (bool) $scope->invalid],
             'responsibility' => ['provider' => [], 'consumer' => [], 'both' => [], 'unknown' => []],
             'grades' => ['rows' => [], 'attempts' => []],
             'completion' => ['summary' => [], 'rows' => []],
         ];
         if ($conn->role === connection::ROLE_TOOL) {
             $d = (new grade_diagnosis())->run($conn, ['limit' => grade_diagnosis::MAXPAGE, 'now' => $now,
-                'importtasklog' => false]);
+                'importtasklog' => false, 'courseid' => (int) $scope->courseid, 'cmid' => (int) $scope->cmid,
+                'invalidscope' => $scope->invalid]);
             foreach ($d['findings'] as $f) {
                 $pkg['responsibility'][$f['responsible']][] = ['channel' => 'grades', 'code' => $f['code'],
                     'severity' => $f['severity'], 'count' => $f['count'], 'certainty' => $f['certainty'],
@@ -84,7 +92,12 @@ class support_package {
                         'person' => $r['person'], 'attemptid' => $r['evidence']['attemptid']];
                 }
             }
-            $page = journal::page($conn->key, ['limit' => self::MAXATTEMPTS]);
+            $jfilters = ['limit' => self::MAXATTEMPTS, 'from' => $scope->from, 'to' => $scope->to];
+            $toolids = (new grade_diagnosis())->scope_toolids($conn, $scope);
+            if ($toolids !== null) {
+                $jfilters['toolids'] = $toolids;
+            }
+            $page = journal::page($conn->key, $jfilters);
             foreach ($page['rows'] as $j) {
                 $pkg['grades']['attempts'][] = [
                     'attemptid' => (string) $j->attemptid,
@@ -104,7 +117,8 @@ class support_package {
                 ];
             }
         }
-        $v = (new completion_view())->build($conn, ['limit' => 500]);
+        $v = (new completion_view())->build($conn, ['limit' => 500, 'courseid' => (int) $scope->courseid,
+            'cmid' => (int) $scope->cmid, 'invalidscope' => $scope->invalid]);
         $pkg['completion']['installed'] = $v['installed'];
         $pkg['completion']['summary'] = $v['summary'];
         foreach ($v['rows'] as $r) {

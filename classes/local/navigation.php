@@ -20,9 +20,9 @@ use moodle_url;
 
 /**
  * Navigation of the plugin's pages (issue #12): the way back to the connection overview with its last filters, the
- * readable label of a connection with its local ids, and direct links to the core LTI configuration.
+ * readable label of a connection with its local ids, and the edit pencils of connections and publications (issue #30).
  *
- * Core links are built only from ids of this site's own tables with the Moodle URL API, only when the target script
+ * Edit links are built only from ids of this site's own tables with the Moodle URL API, only when the target script
  * exists in this Moodle version and the user has the capability the target page requires; never from issuer or partner
  * URLs.
  *
@@ -85,113 +85,94 @@ class navigation {
     }
 
     /**
-     * Direct links to the core configuration of a connection.
+     * Edit target of the connection itself (issue #30): the platform registration (tool role) or the external tool type
+     * (platform role), only with moodle/site:config and when the core script exists.
      *
      * @param connection $c Connection.
-     * @return array[] Each: label (string), url (moodle_url), kind (registration, deployments, resources, tooltype).
+     * @return array|null url (moodle_url), label (accessible name of the pencil)
      */
-    public static function core_links(connection $c): array {
+    public static function edit_connection(connection $c): ?array {
         global $CFG;
-        $out = [];
-        $system = \context_system::instance();
-        if ($c->role === connection::ROLE_TOOL) {
-            if (has_capability('moodle/site:config', $system) && is_file($CFG->dirroot . '/enrol/lti/register_platform.php')) {
-                $out[] = ['kind' => 'registration', 'label' => get_string('nav_edit_registration', 'tool_ltidiagnostics'),
-                    'url' => new moodle_url('/enrol/lti/register_platform.php', ['action' => 'edit', 'regid' => $c->localid])];
-                $out[] = ['kind' => 'deployments', 'label' => get_string('nav_edit_deployments', 'tool_ltidiagnostics'),
-                    'url' => new moodle_url('/enrol/lti/register_platform.php', ['action' => 'view', 'regid' => $c->localid,
-                        'tabselect' => 'tooldeployments'])];
-            }
-            foreach (self::published_courses($c) as $courseid) {
-                if (
-                    is_file($CFG->dirroot . '/enrol/lti/index.php')
-                    && has_capability('moodle/course:enrolreview', \context_course::instance($courseid))
-                ) {
-                    $out[] = ['kind' => 'resources', 'label' => get_string('nav_edit_resources', 'tool_ltidiagnostics', $courseid),
-                        'url' => new moodle_url('/enrol/lti/index.php', ['courseid' => $courseid])];
-                }
-            }
-        } else if (has_capability('moodle/site:config', $system) && is_file($CFG->dirroot . '/mod/lti/typessettings.php')) {
-            $out[] = ['kind' => 'tooltype', 'label' => get_string('nav_edit_tooltype', 'tool_ltidiagnostics'),
-                'url' => new moodle_url('/mod/lti/typessettings.php', ['action' => 'update', 'id' => $c->localid,
-                    'sesskey' => sesskey(), 'returnto' => 'toolconfigure'])];
+        if (!has_capability('moodle/site:config', \context_system::instance())) {
+            return null;
         }
-        return $out;
+        if ($c->role === connection::ROLE_TOOL && is_file($CFG->dirroot . '/enrol/lti/register_platform.php')) {
+            return ['url' => new moodle_url('/enrol/lti/register_platform.php', ['action' => 'edit', 'regid' => $c->localid]),
+                'label' => get_string('nav_edit_registration_of', 'tool_ltidiagnostics', $c->name)];
+        }
+        if ($c->role === connection::ROLE_PLATFORM && is_file($CFG->dirroot . '/mod/lti/typessettings.php')) {
+            return ['url' => new moodle_url('/mod/lti/typessettings.php', ['action' => 'update', 'id' => $c->localid,
+                'sesskey' => sesskey(), 'returnto' => 'toolconfigure']),
+                'label' => get_string('nav_edit_tooltype_of', 'tool_ltidiagnostics', $c->name)];
+        }
+        return null;
     }
 
     /**
-     * Courses with resources published through a tool side connection (bounded).
+     * Edit target of a published resource (enrol_lti instance), only with enrol/lti:config in its course.
      *
-     * @param connection $c Connection.
-     * @return int[]
+     * @param int $courseid Course.
+     * @param int $enrolid Enrolment instance of the publication.
+     * @return moodle_url|null
      */
-    public static function published_courses(connection $c): array {
-        global $DB;
-        if ($c->role !== connection::ROLE_TOOL || !$c->deploymentrowid) {
-            return [];
+    public static function edit_publication(int $courseid, int $enrolid): ?moodle_url {
+        global $CFG;
+        if (!$courseid || !$enrolid || !is_file($CFG->dirroot . '/enrol/editinstance.php')) {
+            return null;
         }
-        $rows = $DB->get_records_sql("SELECT DISTINCT e.courseid
-                                        FROM {enrol_lti_resource_link} rl
-                                        JOIN {enrol_lti_tools} t ON t.id = rl.resourceid
-                                        JOIN {enrol} e ON e.id = t.enrolid
-                                       WHERE rl.ltideploymentid = :dep
-                                    ORDER BY e.courseid", ['dep' => $c->deploymentrowid], 0, 20);
-        return array_map('intval', array_keys($rows));
+        $context = \context_course::instance($courseid, IGNORE_MISSING);
+        if (!$context || !has_capability('enrol/lti:config', $context)) {
+            return null;
+        }
+        return new moodle_url('/enrol/editinstance.php', ['type' => 'lti', 'courseid' => $courseid, 'id' => $enrolid]);
     }
 
     /**
-     * Courses and activities a connection reaches on this site (for the scope bar), bounded.
+     * The standard edit pencil of Moodle, as a link with an accessible name (issue #30 AK4).
      *
-     * Tool side: courses and activities of resources published through the deployment. Platform side: courses and
-     * external tool activities using the tool type.
+     * @param moodle_url $url Target.
+     * @param string $label Accessible name, for example "Edit Graded task".
+     * @return string HTML.
+     */
+    public static function pencil(moodle_url $url, string $label): string {
+        global $OUTPUT;
+        return \html_writer::link($url, $OUTPUT->pix_icon('i/edit', $label), ['class' => 'ltidiag-edit ml-1 ms-1',
+            'aria-label' => $label, 'title' => $label]);
+    }
+
+    /**
+     * Courses and activities a connection reaches on this site (for the scope bar), from its proven use (issue #29).
      *
-     * @param connection $c Connection.
-     * @return array courses (id => name), cms (id => [courseid, name])
+     * @param connection $c Connection (with usage from the inventory).
+     * @return array courses (id => "name (id: n)", HTML-safe), cms (id => [courseid, name "name (id: n)", HTML-safe])
      */
     public static function related(connection $c): array {
-        global $DB;
+        return self::related_usage($c->usage);
+    }
+
+    /**
+     * Courses and activities of a set of usage entries (one connection, or all connections of the overview).
+     *
+     * @param array[] $usage Usage entries (courseid, cmid).
+     * @return array courses (id => "name (id: n)"), cms (id => [courseid, name]); only existing ones, sorted by name.
+     */
+    public static function related_usage(array $usage): array {
+        $names = names::for_usage($usage);
         $courses = [];
         $cms = [];
-        if ($c->role === connection::ROLE_TOOL && $c->deploymentrowid) {
-            $rows = $DB->get_records_sql("SELECT DISTINCT t.id, e.courseid, ctx.contextlevel, ctx.instanceid
-                                            FROM {enrol_lti_resource_link} rl
-                                            JOIN {enrol_lti_tools} t ON t.id = rl.resourceid
-                                            JOIN {enrol} e ON e.id = t.enrolid
-                                       LEFT JOIN {context} ctx ON ctx.id = t.contextid
-                                           WHERE rl.ltideploymentid = :dep", ['dep' => $c->deploymentrowid], 0, 200);
-            foreach ($rows as $r) {
-                $courses[(int) $r->courseid] = '';
-                if ((int) $r->contextlevel === CONTEXT_MODULE) {
-                    $cms[(int) $r->instanceid] = ['courseid' => (int) $r->courseid, 'name' => ''];
-                }
+        foreach ($usage as $u) {
+            if (isset($names['courses'][$u['courseid']])) {
+                $courses[$u['courseid']] = names::course((int) $u['courseid']);
             }
-        } else if ($c->role === connection::ROLE_PLATFORM) {
-            $rows = $DB->get_records_sql("SELECT cm.id, cm.course
-                                            FROM {lti} l
-                                            JOIN {modules} m ON m.name = 'lti'
-                                            JOIN {course_modules} cm ON cm.module = m.id AND cm.instance = l.id
-                                           WHERE l.typeid = :type", ['type' => $c->localid], 0, 200);
-            foreach ($rows as $r) {
-                $courses[(int) $r->course] = '';
-                $cms[(int) $r->id] = ['courseid' => (int) $r->course, 'name' => ''];
+            if ($u['cmid'] && isset($names['cms'][$u['cmid']])) {
+                $cms[$u['cmid']] = ['courseid' => (int) $u['courseid'], 'name' => names::cm(
+                    (int) $u['cmid'],
+                    (int) $u['courseid']
+                )];
             }
         }
-        if ($courses) {
-            foreach ($DB->get_records_list('course', 'id', array_keys($courses), 'fullname', 'id, fullname') as $course) {
-                $courses[(int) $course->id] = format_string(
-                    $course->fullname,
-                    true,
-                    ['context' => \context_course::instance((int) $course->id)]
-                );
-            }
-        }
-        foreach ($cms as $cmid => $info) {
-            try {
-                $cms[$cmid]['name'] = get_fast_modinfo($info['courseid'])->get_cm($cmid)->get_formatted_name();
-            } catch (\moodle_exception $e) {
-                unset($cms[$cmid]);
-            }
-        }
-        return ['courses' => array_filter($courses, fn($n) => $n !== ''), 'cms' => $cms];
+        \core_collator::asort($courses);
+        uasort($cms, fn($a, $b) => strcmp(\core_text::strtolower($a['name']), \core_text::strtolower($b['name'])));
+        return ['courses' => $courses, 'cms' => $cms];
     }
 }

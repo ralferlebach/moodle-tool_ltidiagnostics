@@ -116,7 +116,8 @@ export const init = () => {
         load(section, query, form.action + '?' + query, true);
     });
     document.addEventListener('click', (e) => {
-        const link = e.target.closest('a.ltidiag-nav, a[data-ltidiag-target]');
+        // Section links, links that name a section, and the links of Moodle's paging bar inside a section.
+        const link = e.target.closest('a.ltidiag-nav, a[data-ltidiag-target], ' + SELECTOR + ' .pagination a[href]');
         if (!link || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) {
             return;
         }

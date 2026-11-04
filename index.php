@@ -32,24 +32,29 @@ if (!has_capability('tool/ltidiagnostics:view', $context) && has_capability('too
 }
 $search = optional_param('search', '', PARAM_TEXT);
 $role = optional_param('role', '', PARAM_ALPHA);
-$courseid = optional_param('courseid', 0, PARAM_INT);
+$courseid = max(0, optional_param('courseid', 0, PARAM_INT));
+$cmid = max(0, optional_param('cmid', 0, PARAM_INT));
 if (!in_array($role, ['', 'platform', 'tool'], true)) {
     $role = '';
 }
+$params = array_filter(['search' => $search, 'role' => $role, 'courseid' => $courseid, 'cmid' => $cmid]);
 
 admin_externalpage_setup(
     'tool_ltidiagnostics_index',
     '',
     null,
-    new moodle_url('/admin/tool/ltidiagnostics/index.php', ['search' => $search, 'role' => $role, 'courseid' => $courseid])
+    new moodle_url('/admin/tool/ltidiagnostics/index.php', $params)
 );
 require_capability('tool/ltidiagnostics:view', $context);
 
 $reveal = \tool_ltidiagnostics\local\diagnostic_mode::can_reveal();
 // The detail pages lead back here with the same filters (issue #12).
-\tool_ltidiagnostics\local\navigation::remember_overview(['search' => $search, 'role' => $role, 'courseid' => $courseid]);
-$form = new \tool_ltidiagnostics\form\filter_form(null, null, 'get');
-$form->set_data(['search' => $search, 'role' => $role, 'courseid' => $courseid ?: '']);
+\tool_ltidiagnostics\local\navigation::remember_overview($params);
+// Course and activity filter (issue #29): only connections with a proven use in that course or activity. An unknown
+// or contradictory course or activity shows nothing (fail closed), never the unfiltered list.
+$scope = \tool_ltidiagnostics\local\scope::make($courseid, $cmid);
+$inventory = new \tool_ltidiagnostics\local\inventory();
+$candidates = $inventory->get_connections($role, $search);
 
 /** @var \tool_ltidiagnostics\output\renderer $output */
 $output = $PAGE->get_renderer('tool_ltidiagnostics');
@@ -77,9 +82,22 @@ if ($reveal) {
         \tool_ltidiagnostics\local\diagnostic_mode::until()
     )), \core\output\notification::NOTIFY_WARNING);
 }
-$form->display();
-$connections = (new \tool_ltidiagnostics\local\inventory())->get_connections($role, $search, $courseid);
-echo $output->connection_list($connections, $reveal);
+echo $output->overview_filter($candidates, $params, $scope);
+if ($scope->invalid) {
+    // The filter shows why nothing is listed.
+    echo html_writer::tag('p', get_string('noconnections_invalidscope', 'tool_ltidiagnostics'), [
+        'class' => 'alert alert-info', 'id' => 'tool_ltidiagnostics_noconnections']);
+} else {
+    $connections = ($scope->courseid || $scope->cmid)
+        ? \tool_ltidiagnostics\local\inventory::filter_by_scope($candidates, (int) $scope->courseid, (int) $scope->cmid)
+        : $candidates;
+    if (!$connections && ($scope->courseid || $scope->cmid)) {
+        echo html_writer::tag('p', get_string('noconnections_scope', 'tool_ltidiagnostics'), [
+            'class' => 'alert alert-info', 'id' => 'tool_ltidiagnostics_noconnections']);
+    } else {
+        echo $output->connection_list($connections, $reveal, (int) $scope->courseid, (int) $scope->cmid);
+    }
+}
 
 // Diagnostic mode switch.
 if (has_capability('tool/ltidiagnostics:configure', $context)) {

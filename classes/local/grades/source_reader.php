@@ -49,7 +49,7 @@ class source_reader {
         global $CFG, $DB;
         require_once($CFG->libdir . '/gradelib.php');
         require_once($CFG->libdir . '/completionlib.php');
-        $sql = "SELECT t.id, t.contextid, t.gradesync, t.gradesynccompletion, e.courseid, e.status AS enrolstatus,
+        $sql = "SELECT t.id, t.contextid, t.enrolid, t.gradesync, t.gradesynccompletion, e.courseid, e.status AS enrolstatus,
                        ctx.contextlevel, ctx.instanceid
                   FROM {enrol_lti_tools} t
                   JOIN {enrol} e ON e.id = t.enrolid
@@ -63,6 +63,7 @@ class source_reader {
             'id' => (int) $t->id,
             'kind' => '',
             'courseid' => (int) $t->courseid,
+            'enrolid' => (int) $t->enrolid,
             'cmid' => 0,
             'modname' => '',
             'instance' => 0,

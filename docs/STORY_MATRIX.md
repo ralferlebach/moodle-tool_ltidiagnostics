@@ -1,8 +1,8 @@
-# User stories and test coverage (issue #28)
+# User stories and test coverage (issues #28 to #32)
 
-Every user story of issues #10 to #27 with its fixture, the automated tests on each layer, the target system, the
+Every user story of issues #10 to #27 and #29 to #32 with its fixture, the automated tests on each layer, the target system, the
 artefact a reviewer can look at and the CI job that runs it. "Local" means: executed on the development machine in the
-cells of `docs/ACCEPTANCE.md` (release 0.5.0); the GitHub workflows run the PHPUnit and Behat jobs on every push, the
+cells of `docs/ACCEPTANCE.md` (release 0.6.0); the GitHub workflows run the PHPUnit and Behat jobs on every push, the
 two-site Playwright suites need the local stack (`tests/playwright/stack/README.md`) and are not part of GitHub CI.
 
 Fixtures:
@@ -15,13 +15,15 @@ Fixtures:
   link (grades 65 / 0 / none).
 * **B** - Behat step `the LTI grade scenario exists for` (same data as G through core's generators) and the minimal
   German language pack `tests/fixtures/langpack_de/` (core strings of the menu path, copied from the official pack).
+* **I** - `scope_isolation_test::build()`: three courses with two activities each, tool types and registrations as listed
+  in the #29 row.
 * **L** - load data written in bulk inside `tests/integration/grades_large_data_test.php`.
 
 | Story (issue) | Fixture | PHPUnit | Behat | Playwright (S) | Target | Artefact | CI job |
 |---|---|---|---|---|---|---|---|
 | Menu entry per capability, once, also with pending upgrade (#10) | - | `navigation_identity_test::test_admin_tree_per_capability` (4 capabilities), `test_admin_tree_without_and_with_all` | `ux.feature` "single capability" outline, "Plugins > Admin tools" en/de | - | 4.5, 5.2, 5.3 | menu path in README | PHPUnit, Behat |
 | No hard-coded text, en/de parity, machine ids unchanged (#11) | - | `lang_test::test_i18n_scan_of_output_code` (reviewed exception list), `test_languages_match`, `test_placeholders_match`, `test_literal_string_ids_exist` (incl. `$t()`/`self::t()`), `render_smoke_test` en/de | German tabs scenario | screenshots en/de, `[[` never shown | 4.5 | `screens/*.png` | PHPUnit, Behat |
-| Names and ids with labels, edit links, back to overview (#12) | G | `navigation_identity_test::test_labels_and_core_links`, `test_back_link_keeps_filters`, `test_identity_tiers` | German tabs scenario (ids, back link keeps the search) | support journey | 4.5 | connection header | PHPUnit, Behat |
+| Names and ids with labels, edit links, back to overview (#12) | G | `navigation_identity_test::test_labels_and_edit_targets`, `test_back_link_keeps_filters`, `test_identity_tiers` | German tabs scenario (ids, back link keeps the search) | support journey | 4.5 | connection header | PHPUnit, Behat |
 | Scope bar and defined counters, one population (#13) | G, S | `pair_query_test` (counter = filtered total, disjoint dimensions, empty course, NULL, 0, lastgrade skip, 2xx without booking, 401, two consumers, paging = every match), `test_scope_validation` | grade rows scenario ("not proven" note, filter = count) | counters without JavaScript, scope chips and reset | 4.5 -> 5.2 | rows count, counters | PHPUnit, Behat |
 | Tab names and order, no duplicate headings, partner evidence only in the diagnosis (#14) | B | `render_smoke_test` | German tabs scenario, completion scenario | completion/partner test, read-only views never POST | 4.5 | tab bar | PHPUnit, Behat |
 | Support list and case, audit with names and filters, role matrix (#15, #27) | B | `reporting_test::test_audit_page_filters_and_labels`, `access_control_test` (pages per capability) | support (support role without view, administrator), audit (privacy officer) scenarios | support journey and audit | 4.5 | support/audit screenshots | PHPUnit, Behat |
@@ -35,7 +37,11 @@ Fixtures:
 | Journal: filters, chain, unattributable core rows (#23) | G, S, L | `journal_test::test_server_side_filters`, `grades_large_data_test` (100 000 rows, 500 per page) | journal link scenario | journal of one row | 4.5 -> 5.2 | journal section | PHPUnit, Behat |
 | Evidence and timeline: filters, attribution, paging, AJAX (#25) | L | `sections_evidence_test` (filters, attribution, external function rights and parameters), `grades_large_data_test` (100 000 observations) | - | read-only views | 4.5 | evidence screenshot | PHPUnit |
 | Accessibility (WCAG 2.1 A/AA automated part), keyboard, live region | S | `render_smoke_test` (labels, badges, no nested forms) | tables with captions (0.2.0) | axe on 11 views x 2 languages, keyboard selection, `aria-live` | 4.5 | axe result in the test | PHPUnit |
-| Upgrade 0.4.0 -> 0.5.0 | - | `upgrade_test::test_upgrade_from_040` | - | E2E sites upgraded from the 0.4.0 snapshot before every run | 4.5, 5.2 | - | PHPUnit |
+| Course and activity filter: only proven use, fail closed, same scope everywhere (#29) | I, G, S | `scope_isolation_test` (3 courses x 2 activities, shared registration with 2 deployments, second registration, site-wide/course-bound/unused tool types, course-wide and activity publications, a publication shared by two deployments, an unassigned publication; overview, grade channel, journal scope, invalid scopes, query budget), `channels_output_test::test_grade_tab_follows_scope`, `inventory_test::test_course_filter` | overview course filter, unknown course, grade tab of another course | overview course and activity filter, open link/back/reload/reset, unknown course, connection opened with a foreign course (rows 0, exports carry the scope) | 4.5 -> 5.2 | `screens/*overview_course*` | PHPUnit, Behat |
+| Header without button forest, pencils in the row, names with ids (#30) | I | `navigation_identity_test::test_labels_and_edit_targets` (targets, capability, missing course, escaping), `scope_isolation_test::test_names` (formatted, missing course/activity), `test_overview_rendering` | overview course filter scenario (pencils in the rows, no core link buttons) | one pencil in the header, pencils in "Used in" | 4.5 -> 5.2 | overview and header screenshots | PHPUnit, Behat |
+| Core paging bar above and below, stable journal pages (#31) | - | `pagination_test` (0, 1, 50, 51, 500, 501, 100 000 rows; clamped and tampered page numbers; sizes; independent page parameters; journal snapshot with new rows; "X-Y of Z" and two bars) | journal paging scenario | rows and journal paging bars, history back, tampered `gpage` | 4.5 -> 5.2 | grades screenshot | PHPUnit, Behat |
+| Compact one-row toolbars, folded counters, multi-select by right (#32) | G, S | `channels_output_test::test_selection_by_right_independent_of_optin` | read-only bulk result check scenario (checkboxes without opt-in, no replay action) | toolbars end on one line at 1280 px, counters folded, select all shown = page | 4.5 -> 5.2 | grades screenshot | PHPUnit, Behat |
+| Upgrade 0.4.0 -> 0.5.0 (0.6.0 has no step) | - | `upgrade_test::test_upgrade_from_040` | - | E2E sites upgraded from the 0.4.0 snapshot before every run | 4.5, 5.2 | - | PHPUnit |
 | Performance (100 000 entries, 1 000 mappings, query budgets) | L | `grades_large_data_test` | - | - | 4.5 | reads and seconds asserted | PHPUnit |
 
 Not automated and therefore open for the manual acceptance of the owner: screen reader output (NVDA/VoiceOver), the

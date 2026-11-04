@@ -257,6 +257,7 @@ final class reporting_test extends \advanced_testcase {
         // Every action code the plugin writes has a label of its own or of its prefix.
         foreach (
             ['deleteimport', 'export', 'export_support', 'graderepair_batch', 'graderepair_optin', 'graderepair_optout',
+                'graderesult_bulkcheck',
                 'gradereceipt_answer', 'gradereceipt_request', 'logimport', 'modedisable', 'modeenable', 'partner_export',
                 'partner_import', 'partner_live', 'partner_live_private', 'profilesave', 'runchecks', 'runchecks_private',
                 'trace_export', 'trace_import', 'transfers_export', 'graderepair_request', 'view_course', 'view_support',

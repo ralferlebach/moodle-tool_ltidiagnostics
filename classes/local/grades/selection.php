@@ -58,9 +58,17 @@ class selection {
      * @param string $origin How it was made: rows (marked rows), page (all rows of a page) or matches (every match).
      * @param array $filters Filters of the matches (for the preview text).
      * @param int $now Time.
+     * @param string $action What the selection is for: replay (grade replay) or resultcheck (read-only AGS result check).
      * @return array ok (bool), reason, token, count.
      */
-    public static function create(string $connkey, array $pairs, string $origin, array $filters, int $now): array {
+    public static function create(
+        string $connkey,
+        array $pairs,
+        string $origin,
+        array $filters,
+        int $now,
+        string $action = 'replay'
+    ): array {
         global $SESSION;
         $max = \tool_ltidiagnostics\local\config::bounded('repairbatchmax');
         if (!$pairs) {
@@ -74,7 +82,8 @@ class selection {
         $all = array_filter($all, fn($s) => (int) $s['created'] + $ttl >= $now);
         $token = bin2hex(random_bytes(16));
         $all[$token] = ['connkey' => $connkey, 'pairs' => array_values($pairs), 'origin' => $origin,
-            'filters' => $filters, 'created' => $now];
+            'filters' => $filters, 'created' => $now, 'action' => in_array($action, ['replay', 'resultcheck'], true)
+            ? $action : 'replay'];
         if (count($all) > self::MAXKEPT) {
             $all = array_slice($all, -self::MAXKEPT, null, true);
         }

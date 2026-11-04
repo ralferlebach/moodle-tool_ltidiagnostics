@@ -123,6 +123,7 @@ Feature: Readable navigation, scope, grade rows, support and audit of the LTI di
     When I open the LTI diagnostics tab "grades" of registration "BUW Moodle"
     And I press "Allow grade replay for this connection"
     And I open the LTI diagnostics tab "grades" of registration "BUW Moodle"
+    And I set the field "Action for the selection" to "Replay grades (preview first)"
     And I press "Select all 1 matches of the filter"
     Then I should see "Preview of the bulk replay"
     And I should see "all matches of the filter"
@@ -203,3 +204,87 @@ Feature: Readable navigation, scope, grade rows, support and audit of the LTI di
     Then I should see "Report exported"
     And I should not see "Viewed: Grades (AGS)"
     And I should see "1 of 1 audit entries shown."
+
+  Scenario: The overview course filter lists only connections used in that course, by name and with their own pencils
+    Given an LTI registration "Elsewhere LMS" uses a publication of the course "Other course"
+    And I log in as "admin"
+    When I visit "/admin/tool/ltidiagnostics/index.php"
+    Then I should see "Elsewhere LMS"
+    And I should see "Control LMS"
+    And I should see "Graded task (id:" in the "Control LMS" "table_row"
+    And "a.ltidiag-edit[aria-label^='Edit publication Graded task']" "css_element" should exist in the "Control LMS" "table_row"
+    When I choose the course "LTI course" in the LTI field "Course"
+    And I press "Filter"
+    Then I should see "Control LMS"
+    And I should see "BUW Moodle"
+    And I should not see "Elsewhere LMS"
+    And I should not see "Other course" in the "#tool_ltidiagnostics_connections" "css_element"
+    When I choose the course "Other course" in the LTI field "Course"
+    And I press "Filter"
+    Then I should see "Elsewhere LMS"
+    And I should not see "Control LMS"
+    When I click on "Open" "link" in the "Elsewhere LMS" "table_row"
+    Then I should see "Other course" in the "#tool_ltidiagnostics_scope_chips" "css_element"
+    And "#tool_ltidiagnostics_connheading a.ltidiag-edit" "css_element" should exist
+    And I should not see "Edit deployments"
+    And I should not see "Edit published resources"
+    When I click on "Back to the overview of LTI connections" "link"
+    Then I should see "Elsewhere LMS"
+    And I should not see "Control LMS"
+
+  Scenario: An unknown course shows nothing, never the unfiltered lists
+    Given I log in as "admin"
+    When I visit "/admin/tool/ltidiagnostics/index.php?courseid=999999"
+    Then I should see "The course does not exist. Nothing is shown for this restriction."
+    And I should see "Nothing is listed because the course or activity of the filter is not valid."
+    And I should not see "Control LMS"
+    When I visit "/admin/tool/ltidiagnostics/index.php?courseid=999999&cmid=1"
+    Then I should not see "BUW Moodle"
+
+  Scenario: The grade tab of a course without the publication is empty and says why
+    Given an LTI registration "Elsewhere LMS" uses a publication of the course "Other course"
+    And I log in as "names1"
+    When I open the LTI diagnostics tab "grades" of registration "Control LMS" in course "Other course"
+    Then I should see "This connection has no proven use in the selected course or activity."
+    And I should see "This connection has no published resource in the selected course or activity."
+    And I should not see "Lena Learner"
+    And I should see "Plugin, task and task log settings apply to the whole site."
+    When I open the LTI diagnostics tab "grades" of registration "Control LMS" in course "LTI course"
+    Then I should see "Lena Learner"
+    And I should see "Publication: Graded task (id:"
+
+  Scenario: Users with the analysis right get row checkboxes and a read-only bulk result check without any opt-in
+    Given the following "roles" exist:
+      | shortname  | name             |
+      | diagcheck  | Diagnostics check |
+    And the following "role capabilities" exist:
+      | role      | tool/ltidiagnostics:view | tool/ltidiagnostics:runchecks |
+      | diagcheck | allow                    | allow                         |
+    And the following "users" exist:
+      | username | firstname | lastname | email               |
+      | check1   | Cleo      | Check    | check1@example.com  |
+    And the following "role assigns" exist:
+      | user   | role      | contextlevel | reference |
+      | check1 | diagcheck | System       |           |
+    And I log in as "check1"
+    When I open the LTI diagnostics tab "grades" of registration "Control LMS"
+    Then "#ltidiag-pair-all" "css_element" should exist
+    And "input.ltidiag-pair" "css_element" should exist
+    And the "Action for the selection" select box should contain "Check results at the platform (read only)"
+    And the "Action for the selection" select box should not contain "Replay grades (preview first)"
+    When I press "Select the 1 shown on this page"
+    Then I should see "Check results at the platform"
+    And I should see "Nothing is written or sent."
+    And "Run the read-only check" "button" should exist
+
+  Scenario: The journal has its own compact filter and a paging bar above and below
+    Given the LTI grade journal of registration "Control LMS" has 25 entries
+    And I log in as "admin"
+    When I visit the LTI diagnostics grade journal of registration "Control LMS" with 20 entries per page
+    Then I should see "Entries 1–20 of" in the "#tool_ltidiagnostics_journal_count" "css_element"
+    And "Origin" "field" should exist
+    And "Person or resource link" "field" should exist
+    And I should see "2" in the "[data-ltidiag-section='grades_journal'] .ltidiag-pager" "css_element"
+    When I click on "2" "link" in the "[data-ltidiag-section='grades_journal'] .ltidiag-pager" "css_element"
+    Then I should see "Entries 21–" in the "#tool_ltidiagnostics_journal_count" "css_element"
+    And I should not see "Entries 1–20" in the "#tool_ltidiagnostics_journal_count" "css_element"

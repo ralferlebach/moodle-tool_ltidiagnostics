@@ -132,7 +132,7 @@ class completion_view {
      * Build the view.
      *
      * @param connection $conn Connection.
-     * @param array $options offset, limit.
+     * @param array $options offset, limit, courseid, cmid (scope), invalidscope (true: nothing matches, issue #29).
      * @return array installed, role (sender, receiver or ''), connections (rows of the plugin's register), summary
      *     (class => count), rows (page), total, actions (available actions with reach, only when the user may use them).
      */
@@ -158,7 +158,8 @@ class completion_view {
             );
         }
         $out['connections'] = array_values($cons);
-        if (!$cons) {
+        // An invalid scope (unknown or contradictory course or activity) shows nothing (issue #29, fail closed).
+        if (!$cons || !empty($options['invalidscope'])) {
             return $out;
         }
         $ids = array_keys($cons);

@@ -219,6 +219,62 @@ class journal {
     }
 
     /**
+     * One numbered page of the journal (issue #31), newest first (timecreated DESC, id DESC).
+     *
+     * The pages are counted over a snapshot: rows with an id above $max (written after the first page was shown) are
+     * left out, so page n stays the same while new attempts arrive. The rows of a page are read from the nearer end of
+     * the population (pages in the second half are read in ascending order and reversed), so no offset is larger than
+     * half the population.
+     *
+     * @param string $connkey Connection key.
+     * @param array $filters Filters of where().
+     * @param int $page Requested page (0-based; clamped to the last page).
+     * @param int $perpage Page size (1 to MAXPAGE).
+     * @param int $max Snapshot id (0: the newest row now).
+     * @return array rows, total, page, pages, max
+     */
+    public static function numbered_page(string $connkey, array $filters, int $page, int $perpage, int $max): array {
+        global $DB;
+        $perpage = max(1, min(self::MAXPAGE, $perpage));
+        [$where, $params] = self::where($connkey, $filters);
+        $current = (int) $DB->get_field_sql("SELECT MAX(id) FROM {" . self::TABLE . "} WHERE $where", $params);
+        $max = $max > 0 ? min($max, $current) : $current;
+        $where .= ' AND id <= :jmaxid';
+        $params['jmaxid'] = $max;
+        $total = $max ? (int) $DB->count_records_select(self::TABLE, $where, $params) : 0;
+        $pages = max(1, (int) ceil($total / $perpage));
+        $page = max(0, min($page, $pages - 1));
+        $offset = $page * $perpage;
+        $rows = [];
+        if ($total) {
+            if ($offset <= $total / 2) {
+                $rows = array_values($DB->get_records_select(
+                    self::TABLE,
+                    $where,
+                    $params,
+                    'timecreated DESC, id DESC',
+                    '*',
+                    $offset,
+                    $perpage
+                ));
+            } else {
+                $count = min($perpage, $total - $offset);
+                $rows = array_reverse(array_values($DB->get_records_select(
+                    self::TABLE,
+                    $where,
+                    $params,
+                    'timecreated ASC, id ASC',
+                    '*',
+                    $total - $offset - $count,
+                    $count
+                )));
+            }
+        }
+        return ['rows' => $rows, 'total' => $total, 'page' => $page, 'pages' => $pages, 'max' => $max,
+            'newer' => max(0, $current - $max) > 0];
+    }
+
+    /**
      * WHERE clause of the journal filters (issue #23). Every value is typed here; unknown values are ignored.
      *
      * @param string $connkey Connection key.
@@ -278,6 +334,16 @@ class journal {
                 $where .= " AND toolid $s";
                 $params += $p;
             }
+        }
+        $search = trim((string) ($filters['usersearch'] ?? ''));
+        if ($search !== '') {
+            // Learners by name or e-mail (the caller checks the right to see names).
+            $like = [];
+            foreach (['firstname', 'lastname', 'email'] as $i => $field) {
+                $like[] = $DB->sql_like('su.' . $field, ':jus' . $i, false, false);
+                $params['jus' . $i] = '%' . $DB->sql_like_escape(\core_text::substr($search, 0, 100)) . '%';
+            }
+            $where .= ' AND userid IN (SELECT su.id FROM {user} su WHERE ' . implode(' OR ', $like) . ')';
         }
         if (($filters['attribution'] ?? '') === 'attributed') {
             $where .= ' AND resourcelinkrowid > 0';

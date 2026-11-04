@@ -274,6 +274,52 @@ switch ($action) {
         echo json_encode(['added' => $made, 'link' => $linkid]) . "\n";
         break;
 
+    case 'othercourse':
+        // Tool side (issue #29): a second course with a course-wide publication used by its own registration only.
+        $gen = new \testing_data_generator();
+        $course = $DB->get_record('course', ['shortname' => 'othere2e']) ?: $gen->create_course(['fullname' => 'Other course E2E',
+            'shortname' => 'othere2e']);
+        $toolid = (int) $DB->get_field_sql("SELECT t.id FROM {enrol_lti_tools} t JOIN {enrol} e ON e.id = t.enrolid
+                                              WHERE e.courseid = ?", [$course->id], IGNORE_MULTIPLE);
+        if (!$toolid) {
+            $toolid = (int) $gen->create_lti_tool((object) ['courseid' => $course->id, 'ltiversion' => 'LTI-1p3'])->id;
+        }
+        $regid = (int) $DB->get_field('enrol_lti_app_registration', 'id', ['name' => 'Other platform E2E']);
+        if (!$regid) {
+            $reg = $gen->get_plugin_generator('enrol_lti')->create_application_registration(['name' => 'Other platform E2E',
+                'platformid' => 'https://other-e2e.example.org', 'clientid' => 'other-e2e',
+                'authrequesturl' => 'https://other-e2e.example.org/auth', 'jwksurl' => 'https://other-e2e.example.org/jwks',
+                'accesstokenurl' => 'https://other-e2e.example.org/token', 'deploymentname' => 'Other deployment',
+                'deploymentid' => '1']);
+            $regid = (int) $reg->get_id();
+        }
+        $depid = (int) $DB->get_field('enrol_lti_deployment', 'id', ['platformid' => $regid]);
+        if (!$DB->record_exists('enrol_lti_resource_link', ['ltideploymentid' => $depid])) {
+            $DB->insert_record('enrol_lti_resource_link', (object) ['resourcelinkid' => 'rl-other-1', 'ltideploymentid' => $depid,
+                'resourceid' => $toolid, 'timecreated' => time(), 'timemodified' => time()]);
+        }
+        echo json_encode(['courseid' => (int) $course->id, 'key' => 'tool:' . $regid . ':' . $depid]) . "\n";
+        break;
+
+    case 'journalrows':
+        // Tool side (issue #31): older core journal entries of the Control link, so that the journal has several pages.
+        $control = $state['tool']['registrations']['control'];
+        $linkid = (int) $DB->get_field(
+            'enrol_lti_resource_link',
+            'id',
+            ['ltideploymentid' => $control['deploymentrowid']],
+            IGNORE_MULTIPLE
+        );
+        $n = (int) ($options['arg'] ?? 45);
+        for ($i = 1; $i <= $n; $i++) {
+            \tool_ltidiagnostics\local\grades\journal::insert(['connkey' => $control['key'], 'origin' => 'core_task',
+                'source' => 'task_log', 'deploymentrowid' => (int) $control['deploymentrowid'], 'resourcelinkrowid' => $linkid,
+                'toolid' => (int) $state['tool']['toolid'], 'userid' => (int) $state['learnerid'], 'state' => 'skipped',
+                'skipreason' => 'lastgrade_unchanged', 'timecreated' => time() - DAYSECS - $i]);
+        }
+        echo json_encode(['added' => $n]) . "\n";
+        break;
+
     case 'toolstate':
         $l = [];
         foreach ($DB->get_records('enrol_lti_users', ['toolid' => $state['tool']['toolid']]) as $u) {

@@ -176,7 +176,8 @@ final class inventory_test extends \advanced_testcase {
     }
 
     /**
-     * Course filter: course tools only for their course, tool-role connections stay.
+     * Course filter (issue #29): a course-bound tool type matches its course; a site-wide tool type without an activity
+     * in the course matches no course.
      */
     public function test_course_filter(): void {
         $this->resetAfterTest();
@@ -189,9 +190,9 @@ final class inventory_test extends \advanced_testcase {
         $inventory = new inventory();
         $one = $inventory->get_connections('platform', '', (int) $course1->id);
         $two = $inventory->get_connections('platform', '', (int) $course2->id);
-        $this->assertArrayHasKey("platform:$sitetype", $one);
+        $this->assertArrayNotHasKey("platform:$sitetype", $one, 'A site-wide type is no match on its own.');
         $this->assertArrayHasKey("platform:$coursetype", $one);
-        $this->assertArrayHasKey("platform:$sitetype", $two);
+        $this->assertArrayNotHasKey("platform:$sitetype", $two);
         $this->assertArrayNotHasKey("platform:$coursetype", $two);
     }
 }

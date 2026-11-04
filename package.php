@@ -45,7 +45,8 @@ if (
     throw new \moodle_exception('invalidconnection', 'tool_ltidiagnostics');
 }
 $now = time();
-$pkg = support_package::build($conn, $now);
+// The package holds the population of the page's scope (issue #29).
+$pkg = support_package::build($conn, $now, \tool_ltidiagnostics\local\scope::from_request());
 audit::log('export_support', $key, 'format=' . $format);
 \tool_ltidiagnostics\event\report_exported::create(['context' => $context, 'other' => ['connection' => $key,
     'format' => 'support_' . $format]])->trigger();
